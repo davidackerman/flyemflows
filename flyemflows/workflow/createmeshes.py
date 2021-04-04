@@ -32,7 +32,6 @@ from ..brick import BrickWall
 from . import Workflow
 
 import struct
-
 import json
 
 logger = logging.getLogger(__name__)
@@ -506,43 +505,51 @@ class CreateMeshes(Workflow):
         self._init_input_service()
         self._prepare_output()
 
-        subset_supervoxels, existing_svs = self._load_subset_supervoxels()
-        batch_size = self.config["createmeshes"]["subset-batch-size"]
+        rescale_levels = [self.config["input"]["adapters"]["rescale-level"]["level"]]
+        if "lods" in self.config["input"]["adapters"]["rescale-level"]:
+            rescale_levels = self.config["input"]["adapters"]["rescale-level"]["lods"]
+            rescale_levels.sort()
+            self.config["input"]["adapters"]["rescale-level"]["lods"] = rescale_levels
 
-        # Prefetch all bricks for all batches because in most cases
-        # there will be a lot of common bricks between batches,
-        # and the segmentation is relatively cheap to store (it's compressed)
-        # TODO:
-        #   In some cases it might be nice to fetch the bricks separately for each batch.
-        #   This could be made configurable.
-        bricks_ddf, subset_supervoxels = self.init_bricks_ddf(self.input_service, subset_supervoxels)
-        bricks_ddf = bricks_ddf.persist()
+        for rescale_level in rescale_levels:
+            self.config["input"]["adapters"]["rescale-level"]["level"] = rescale_level
+            
+            subset_supervoxels, existing_svs = self._load_subset_supervoxels()
+            batch_size = self.config["createmeshes"]["subset-batch-size"]
 
-        subset_supervoxels = np.asarray(subset_supervoxels)
-        if self.config["createmeshes"]["shuffle-label-order"]:
-            # Randomize the supervoxel order, to reduce incidence of shared bricks within a batch.
-            # (Computation is not parallelized within a brick (or even a partition),
-            # unless 'parallelize-within-bricks' is working.)
-            np.random.seed(0)
-            np.random.shuffle(subset_supervoxels)
+            # Prefetch all bricks for all batches because in most cases
+            # there will be a lot of common bricks between batches,
+            # and the segmentation is relatively cheap to store (it's compressed)
+            # TODO:
+            #   In some cases it might be nice to fetch the bricks separately for each batch.
+            #   This could be made configurable.
+            bricks_ddf, subset_supervoxels = self.init_bricks_ddf(self.input_service, subset_supervoxels)
+            bricks_ddf = bricks_ddf.persist()
 
-        if batch_size == 0:
-            self.execute_batch(0, bricks_ddf, subset_supervoxels, existing_svs)
-        else:
-            assert len(subset_supervoxels) > 0
+            subset_supervoxels = np.asarray(subset_supervoxels)
+            if self.config["createmeshes"]["shuffle-label-order"]:
+                # Randomize the supervoxel order, to reduce incidence of shared bricks within a batch.
+                # (Computation is not parallelized within a brick (or even a partition),
+                # unless 'parallelize-within-bricks' is working.)
+                np.random.seed(0)
+                np.random.shuffle(subset_supervoxels)
 
-            batches = iter_batches(subset_supervoxels, batch_size)
-            logger.info(f"Creating meshes in {len(batches)} batches")
+            if batch_size == 0:
+                self.execute_batch(0, bricks_ddf, subset_supervoxels, existing_svs)
+            else:
+                assert len(subset_supervoxels) > 0
 
-            for batch_index, batch_subset_svs in enumerate(batches):
-                batch_existing_svs = None
-                if existing_svs is not None:
-                    batch_existing_svs = existing_svs & set(batch_subset_svs)
+                batches = iter_batches(subset_supervoxels, batch_size)
+                logger.info(f"Creating meshes in {len(batches)} batches")
 
-                with Timer(f"Batch {batch_index:02}: Running batch", logger):
-                    with switch_cwd(f'batch-{batch_index:02d}', create=True):
-                        self.execute_batch(batch_index, bricks_ddf, batch_subset_svs, batch_existing_svs)
+                for batch_index, batch_subset_svs in enumerate(batches):
+                    batch_existing_svs = None
+                    if existing_svs is not None:
+                        batch_existing_svs = existing_svs & set(batch_subset_svs)
 
+                    with Timer(f"Batch {batch_index:02}: Running batch", logger):
+                        with switch_cwd(f'batch-{batch_index:02d}', create=True):
+                            self.execute_batch(batch_index, bricks_ddf, batch_subset_svs, batch_existing_svs)
 
     def execute_batch(self, batch_index, bricks_ddf, subset_supervoxels, existing_svs):
         brick_counts_df = self._compute_brick_labelcounts(batch_index, bricks_ddf, subset_supervoxels)
@@ -771,9 +778,10 @@ class CreateMeshes(Workflow):
         Compute the brickwise labelcounts for
         """
         export_labelcounts = self.config["createmeshes"]["export-labelcounts"]
+        output_dirs = {}
         if export_labelcounts:
-            os.makedirs('brick_ddf_partitions')
-            os.makedirs('brick_labelcounts')
+            output_dirs['brick_ddf_partitions'] = mkdir(self.config,'brick_ddf_partitions') 
+            output_dirs['brick_labelcounts'] = mkdir(self.config,'brick_labelcounts')
 
         with Timer(f"Batch {batch_index:02}: Computing brickwise labelcounts", logger):
             if export_labelcounts:
@@ -788,6 +796,7 @@ class CreateMeshes(Workflow):
                                 .map_partitions(compute_brick_labelcounts,
                                                 subset_labels=delayed(subset_supervoxels),
                                                 export_labelcounts=export_labelcounts,
+                                                output_dirs=output_dirs,
                                                 meta=dtypes)
                                 .clear_divisions()
                                 .compute())
@@ -973,11 +982,12 @@ class CreateMeshes(Workflow):
 
     def _compute_brickwise_meshes(self, batch_index, bricks_ddf, num_brick_meshes, num_bricks, num_unique_bricks):
         options = self.config["createmeshes"]
-        brick_shape = self.config["input"]["geometry"]["message-block-shape"]
+        
         def compute_meshes_for_bricks(bricks_partition_df):
             assert len(bricks_partition_df) > 0, "partition is empty" # drop_empty_partitions() should have eliminated these.
             result_dfs = []
             for row in bricks_partition_df.itertuples():
+                brick_shape = row.brick.logical_box[1] - row.brick.logical_box[0]
                 assert len(row.sv) > 0
                 #TODO : fix this so don't have to specify index 0 but rather it is assigned correctly
                 mesh_origin = []
@@ -986,7 +996,7 @@ class CreateMeshes(Workflow):
                 for i in range(len(row.sv)):
                     mesh_origin.append(np.array([row.lx0_min[i], row.ly0_min[i], row.lz0_min[i]]))
                     fragment_origin.append(np.array([row.lx0, row.ly0, row.lz0]))
-                    fragment_shape.append(np.array(brick_shape))
+                    fragment_shape.append(brick_shape)
     
                 stats_df = pd.DataFrame({'sv': row.sv, 'sv_size': row.sv_size, 
                                          'mesh_origin':mesh_origin, 'fragment_shape':fragment_shape, 'fragment_origin':fragment_origin,
@@ -1024,11 +1034,11 @@ class CreateMeshes(Workflow):
         msg = f"Batch {batch_index:02}: Computing {num_brick_meshes} brickwise meshes from {num_bricks} bricks ({num_unique_bricks} unique)"
         with Timer(msg, logger):
             # Export brick mesh statistics
-            os.makedirs('brick-mesh-stats')
+            dir_name = mkdir(self.config,'brick-mesh-stats')
             brick_stats_ddf = brick_meshes_ddf.drop(['mesh'], axis=1)
 
             # to_csv() blocks, so this triggers the computation.
-            brick_stats_ddf.to_csv('brick-mesh-stats/partition-*.csv', index=False, header=True)
+            brick_stats_ddf.to_csv(f'{dir_name}/partition-*.csv', index=False, header=True)
             del brick_stats_ddf
 
         return brick_meshes_ddf
@@ -1042,6 +1052,10 @@ class CreateMeshes(Workflow):
         compute_normals = options["post-stitch-parameters"]["compute-normals"]
 
         stitch_method = options["stitch-method"]
+
+        current_lod = self.config["input"]["adapters"]["rescale-level"]["level"]
+        highest_res_lod = self.config["input"]["adapters"]["rescale-level"]["lods"][0] if "lods" in self.config["input"]["adapters"]["rescale-level"] else None
+
         def assemble_sv_meshes(sv_brick_meshes_df):
             assert len(sv_brick_meshes_df) > 0
 
@@ -1066,7 +1080,9 @@ class CreateMeshes(Workflow):
             assert (sv_brick_meshes_df['sv'] == sv).all()
 
             if stitch_method == 'multires':
-                concatenated_mesh_bytes = Mesh.concatenate_mesh_bytes(sv_brick_meshes_df['mesh'])
+                # Bricks are always size of n5 attributes dimensions, so we need to concatenate lower res meshes
+                # into larger bricks
+                concatenated_mesh_bytes = Mesh.concatenate_mesh_bytes(sv_brick_meshes_df['mesh'], current_lod, highest_res_lod)
                 return pd.DataFrame({'sv': sv,
                                 'mesh': concatenated_mesh_bytes,
                                 'vertex_count': 0,
@@ -1112,15 +1128,15 @@ class CreateMeshes(Workflow):
             sv_meshes_ddf = drop_empty_partitions(sv_meshes_ddf)
 
             # Export stitched mesh statistics
-            os.makedirs('stitched-mesh-stats')
+            dir_name = mkdir(self.config,'stitched-mesh-stats')
 
             # to_csv() blocks, so this triggers the computation.
-            sv_meshes_ddf[['sv', 'vertex_count', 'compressed_size']].to_csv('stitched-mesh-stats/partition-*.csv', index=False, header=True)
+            sv_meshes_ddf[['sv', 'vertex_count', 'compressed_size']].to_csv(f'{dir_name}/partition-*.csv', index=False, header=True)
 
         return sv_meshes_ddf
-
- 
+    
     def _write_meshes(self, batch_index, sv_meshes_ddf, subset_supervoxels, existing_svs):
+
         def write_info_file(path):
             #default to 10 quantization bits
             with open(f'{path}/info', 'w') as f:
@@ -1133,7 +1149,7 @@ class CreateMeshes(Workflow):
 
                 json.dump(info, f)
 
-        def write_index_file(path, meshes, lods):
+        def write_index_file(path, meshes, current_lod, lods):
             #currently only implemented for single res
             template = meshes[0]
             chunk_shape = template.fragment_shape
@@ -1151,16 +1167,25 @@ class CreateMeshes(Workflow):
             fragment_positions = np.array(fragment_positions)
             fragment_offsets = np.array(fragment_offsets)
 
-            print(f"{path} {num_fragments_per_lod} {chunk_shape} {grid_origin} {vertex_offsets} {fragment_positions.T.astype('<I')} {fragment_offsets.astype('<I')}")
-            with open(f"{path}.index", 'wb') as f:
-                f.write(chunk_shape.astype('<f').tobytes())
-                f.write(grid_origin.astype('<f').tobytes())
-                f.write(struct.pack('<I', num_lods))
-                f.write(lod_scales.astype('<f').tobytes())
-                f.write(vertex_offsets.astype('<f').tobytes(order='C'))
+            #print(f"{path} lod({current_lod}) {num_fragments_per_lod} {chunk_shape} {grid_origin} {vertex_offsets} {fragment_positions.T.astype('<I')} {fragment_offsets.astype('<I')}")
+            with open(f"{path}.index_1", 'ab') as f:
+                if current_lod == lods[0]: #then is highest res lod
+                    f.write(chunk_shape.astype('<f').tobytes())
+                    f.write(grid_origin.astype('<f').tobytes())
+                    f.write(struct.pack('<I', num_lods))
+                    f.write(lod_scales.astype('<f').tobytes())
+                    f.write(vertex_offsets.astype('<f').tobytes(order='C'))
                 f.write(num_fragments_per_lod.astype('<I').tobytes())
+            
+            with  open(f"{path}.index_2", 'ab') as f:
                 f.write(fragment_positions.T.astype('<I').tobytes(order='C'))
                 f.write(fragment_offsets.astype('<I').tobytes(order='C'))
+            
+            if current_lod == lods[-1]: #then is lowest res and need to finish
+                os.system(f"cat {path}.index_1 {path}.index_2 > {path}.index")
+                os.remove(f"{path}.index_1")
+                os.remove(f"{path}.index_2")
+
 
         
         options = self.config["createmeshes"]
@@ -1169,6 +1194,9 @@ class CreateMeshes(Workflow):
         skip_existing = options["skip-existing"]
         destination = self.config["output"]
         resource_mgr = self.resource_mgr_client
+
+        current_lod = self.config["input"]["adapters"]["rescale-level"]["level"]
+        lods = self.config["input"]["adapters"]["rescale-level"]["lods"] if "lods" in self.config["input"]["adapters"]["rescale-level"] else []
 
         def write_sv_meshes(sv_meshes_df, log=True):
             (destination_type,) = destination.keys()
@@ -1191,12 +1219,11 @@ class CreateMeshes(Workflow):
                 idx=0
                 for name, mesh_bytes in keyvalues.items():
                     path = destination['directory'] + "/" + name
-                    with open(path, 'wb') as f:
+                    with open(path, 'ab') as f:
                         f.write(mesh_bytes)
                     
                     if fmt=="custom_drc":
-                        lods = [0]
-                        write_index_file(path, sv_meshes_df['mesh'].iloc[idx], lods)
+                        write_index_file(path, sv_meshes_df['mesh'].iloc[idx], current_lod, lods)
                         write_info_file(destination['directory'] )
                     idx+=1
             else:
@@ -1239,7 +1266,7 @@ class CreateMeshes(Workflow):
         np.save('final-mesh-stats.npy', final_stats_df.to_records(index=False))
 
 
-def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts):
+def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, output_dirs):
     """
     For the given pandas DataFrame of Bricks,
     i.e. one partition of the dask.DataFrame returned by BrickWall.bricks_as_ddf(),
@@ -1270,7 +1297,7 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts):
     if export_labelcounts and len(brick_df) > 0:
         debug_file_name = 'z{:05d}-y{:05d}-x{:05d}'.format(*brick_df[['lz0', 'ly0', 'lx0']].iloc[0].values.tolist())
         debug_file_name += '-{:04d}'.format(np.random.randint(10000))
-        np.save(f'brick_ddf_partitions/{debug_file_name}.npy', brick_df[['lz0', 'ly0', 'lx0']].to_records(index=True))
+        np.save(f'{output_dirs["brick_ddf_partitions"]}/{debug_file_name}.npy', brick_df[['lz0', 'ly0', 'lx0']].to_records(index=True))
 
     brick_counts_dfs = []
     for row in brick_df.itertuples():
@@ -1306,7 +1333,7 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts):
         if export_labelcounts:
             debug_file_name = 'z{:05d}-y{:05d}-x{:05d}'.format(*brick.logical_box[0].tolist())
             debug_file_name += '-r{:04d}'.format(np.random.randint(10000))
-            np.save(f'brick_labelcounts/{debug_file_name}.npy', brick_counts_df.to_records(index=False))
+            np.save(f'{output_dirs["brick_labelcounts"]}/{debug_file_name}.npy', brick_counts_df.to_records(index=False))
 
     if len(brick_counts_dfs) > 0:
         return pd.concat(brick_counts_dfs, ignore_index=True)
@@ -1329,11 +1356,6 @@ def compute_meshes_for_brick(brick, stats_df, options):
     decimation = options["pre-stitch-parameters"]["decimation"]
     max_vertices = options["pre-stitch-parameters"]["max-vertices"]
     rescale_factor = options["rescale-before-write"]
-
-    # Used to prevent 0.5 vertex shift, which can screw up quanitzaiton for custom draco
-    #center = True
-    #if options["stitch-method"] == "multires":
-    #    center = False
 
     #TODO: need to handle rescale factor for multires
     if isinstance(rescale_factor, list):
@@ -1446,13 +1468,8 @@ def serialize_custom_drc(sv, meshes, path=None):
     serialized_bytes = bytearray()
     for mesh in meshes:
         mesh.compress('custom_draco')
-        #if mesh.draco_bytes:
         serialized_bytes.extend( mesh.draco_bytes )
-        #else:
-        #    print(f"cereal after {sv} {mesh.mesh_origin} {mesh.fragment_origin} {mesh.fragment_shape} {np.amax(mesh.vertices_zyx[:,::-1], axis=0)} {np.amin(mesh.vertices_zyx[:,::-1], axis=0)}")
-
-        #print(f"faces: {len(mesh.faces)},{len(unserialized.faces)} / verts {len(mesh.vertices_zyx)},{len(unserialized.vertices_zyx)}")
-
+       
     return serialized_bytes
 
 def serialize_mesh(sv, mesh, path=None, fmt=None, log=True):
@@ -1487,3 +1504,8 @@ def serialize_mesh(sv, mesh, path=None, fmt=None, log=True):
 
         return b''
 
+def mkdir(config, name, exist_ok=False):
+    if "lods" in config["input"]["adapters"]["rescale-level"]:
+        name+="-lod-"+str(config["input"]["adapters"]["rescale-level"]["level"])
+    os.makedirs(name, exist_ok=exist_ok)
+    return name

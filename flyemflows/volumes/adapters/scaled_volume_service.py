@@ -137,7 +137,7 @@ class ScaledVolumeService(VolumeServiceWriter):
         
         if true_scale in self.original_volume_service.available_scales:
             # The original source already has the data at the necessary scale.
-            return self.original_volume_service.get_subvolume( box_zyx, true_scale )
+            return self.original_volume_service.get_subvolume( box_zyx, true_scale)
 
         # Start with the closest scale we've got
         base_scales = np.array(self.original_volume_service.available_scales)
