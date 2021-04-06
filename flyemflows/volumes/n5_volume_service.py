@@ -212,7 +212,7 @@ class N5VolumeService(VolumeServiceWriter):
     def get_subvolume(self, box_zyx, scale=0):
         box_zyx = np.asarray(box_zyx)
         return self.n5_dataset(scale)[box_to_slicing(*box_zyx.tolist())]
-
+    
 
     def write_subvolume(self, subvolume, offset_zyx, scale=0):
         offset_zyx = np.asarray(offset_zyx)

@@ -141,7 +141,7 @@ class ClusterContext:
 
             if self.cluster_type == "lsf":
                 from dask_jobqueue import LSFCluster
-                cluster = LSFCluster(ip='0.0.0.0')
+                cluster = LSFCluster()#ip='0.0.0.0')
             elif self.cluster_type == "sge":
                 from dask_jobqueue import SGECluster
                 cluster = SGECluster(ip='0.0.0.0')

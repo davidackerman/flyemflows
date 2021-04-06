@@ -506,6 +506,7 @@ class CreateMeshes(Workflow):
         self._prepare_output()
 
         rescale_levels = [self.config["input"]["adapters"]["rescale-level"]["level"]]
+        base_decimation =  self.config["createmeshes"]["pre-stitch-parameters"]["decimation"]
         if "lods" in self.config["input"]["adapters"]["rescale-level"]:
             rescale_levels = self.config["input"]["adapters"]["rescale-level"]["lods"]
             rescale_levels.sort()
@@ -513,7 +514,8 @@ class CreateMeshes(Workflow):
 
         for rescale_level in rescale_levels:
             self.config["input"]["adapters"]["rescale-level"]["level"] = rescale_level
-            
+            self.config["createmeshes"]["pre-stitch-parameters"]["decimation"] = min(base_decimation*2**rescale_level,1.0)
+
             subset_supervoxels, existing_svs = self._load_subset_supervoxels()
             batch_size = self.config["createmeshes"]["subset-batch-size"]
 
@@ -1467,6 +1469,7 @@ def generate_mesh(sv, body, mask, mask_box, mesh_origin, fragment_shape, fragmen
 def serialize_custom_drc(sv, meshes, path=None):
     serialized_bytes = bytearray()
     for mesh in meshes:
+        mesh.trim()
         mesh.compress('custom_draco')
         serialized_bytes.extend( mesh.draco_bytes )
        
