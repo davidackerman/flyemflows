@@ -1,0 +1,596 @@
+    1  cd scripts/
+    2  ls
+    3  cd testNewCode/
+    4  ls
+    5  pwd
+    6  conda activate multiresolution
+    7  bsub -n 2 -q local launchflow -n 124 er
+    8  bsub -n 2 -q local -P cosem launchflow -n 124 er
+    9  cd ../../meshes/
+   10  ls
+   11  mv er backup_er
+   12  mkdir er
+   13  bjobs
+   14  cd ../scripts/
+   15  ls
+   16  cd testNewCode/sc
+   17  cd testNewCode/
+   18  bsub -n 2 -P cosem launchflow -n 124 er
+   19  bjobs
+   20  ls -ltr
+   21  cat er-20210405.101623/output.log 
+   22  ls -ltr
+   23  cd ../../meshes/er
+   24  ls
+   25  cd ../backup_er/
+   26  ls
+   27  ls -ltr
+   28  cd ../er
+   29  ls
+   30  cd ..
+   31  ls
+   32  cd ../scripts/
+   33  ls
+   34  cd testNewCode/
+   35  ls
+   36  cd
+   37  cd /groups/cosem/cosem/ackermand/meshesForWebsite/multiresolution/HeLa2/scripts/testNewCode/er
+   38  vi workflow.yaml 
+   39  bjobs
+   40  bkill -9 95566798
+   41  bkill 95566798
+   42  bjobs
+   43  vi workflow.yaml 
+   44  diff workflow.yaml ../mito_cropped
+   45  cd ..
+   46  bsub -n 2 -P cosem launchflow -n 124 er
+   47  bsub -n 2 -P cosem launchflow -n 124 mito
+   48  bjobs
+   49  ls -ltr
+   50  diff er-20210405.104355/workflow.yaml er-20210405.101623/workflow.yaml 
+   51  bjbos
+   52  bjobs
+   53  ls
+   54  tail
+   55  ls
+   56  tail mito_cropped-20210405.104355/output.log 
+   57  bkill 0
+   58  bjobs
+   59  bsub -n 2 -q local -P cosem launchflow -n 124 er
+   60  bsub -n 2 -q local -P cosem launchflow -n 124 mito_seg
+   61  bjobs
+   62  ls
+   63  bsub -n 2 -q local -P cosem launchflow -n 124 mito_cropped
+   64  ls
+   65  cd ../../meshes/
+   66  ls
+   67  ls -ltr
+   68  cd mito_cropped/
+   69  ls
+   70  cd ../er
+   71  ls
+   72  ls -ltr
+   73  du -h
+   74  ls
+   75  ls -ltr
+   76  cd ../
+   77  ls
+   78  cd ../scripts/
+   79  ls
+   80  cd er_seg/
+   81  cd ../testNewCode/
+   82  ls
+   83  cd er
+   84  cd ..
+   85  ls -ltr
+   86  tail mito_cropped-20210405.111322/output.log 
+   87  ls
+   88  ls -ltr
+   89  cls -ltr
+   90  tail er-20210405.111225/output.log 
+   91  grep -in "writing" er-20210405.111225/output.log 
+   92  tail er-20210405.111225/output.log 
+   93  bjobs
+   94  bkill 0
+   95  bsub -n 2 -q local -P cosem launchflow -n 124 er
+   96  bjobs
+   97  bkill 0
+   98  bsub -n 2 -W48:00 -q local -P cosem launchflow -n 124 er
+   99  vi er/dask-config.yaml 
+  100  bkill 0
+  101  ls
+  102  bsub -n 2 -W48:00 -q local -P cosem launchflow -n 124 er
+  103  bjobs
+  104  bkill 0
+  105  ls
+  106  cd ../../meshes/
+  107  ls
+  108  cd mito_cropped/
+  109  ls
+  110  pwd
+  111  cd ../
+  112  ls
+  113  cd er
+  114  ls
+  115  bjobs
+  116  cd ../
+  117  cd ../scripts/
+  118  ls
+  119  cd testNewCode/
+  120  ls
+  121  vi er/workflow.yaml 
+  122  bsub -n 2 -W48:00 -q local -P cosem launchflow -n 124 er
+  123  top
+  124  ls
+  125  cd er
+  126  ls
+  127  cd ../../
+  128  ls
+  129  cd testNewCode/
+  130  ls -ltr
+  131  tail er-20210405.155703/output.log 
+  132  bjobs
+  133  ls -ltr
+  134  tail er-20210405.130041/output.log 
+  135  head -100 er-20210405.130041/output.log 
+  136  head 100 er-20210405.130041/output.log 
+  137  head 110 er-20210405.130041/output.log 
+  138  vi er-20210405.130041/output.log 
+  139  ls
+  140  bjobs
+  141  ls -ltr
+  142  bkill 0
+  143  vi er/workflow.yaml 
+  144  ls
+  145  bsub -n 2 -P cosem -q local launchflow -n 124 er
+  146  bjobs
+  147  ls
+  148  bjobs
+  149  pwd
+  150  ls
+  151  bjobs
+  152  ls -ltr
+  153  tail er-20210405.165919/workflow.yaml 
+  154  tail er-20210405.165919/output.log 
+  155  bjobs
+  156  tail er-20210405.165919/output.log 
+  157  ls
+  158  bjobs
+  159  ls
+  160  bjobs
+  161  ls
+  162  bkill 0
+  163  ls
+  164  vi er/workflow.yaml 
+  165  top
+  166  ls
+  167  vi er/workflow.yaml 
+  168  cd ~/Programming/
+  169  ls
+  170  du -h
+  171  vi er/workflow.yaml 
+  172  bsub -n 2 -P cosem -q local launchflow -n 124 er
+  173  cd /groups/cosem/cosem/ackermand/meshesForWebsite/
+  174  ls
+  175  cd multiresolution/
+  176  ls
+  177  cd HeLa2/scripts/
+  178  ls
+  179  cd testNewCode/
+  180  vi er/workflow.yaml 
+  181  time touch test.txt
+  182  time touch rm test.txt
+  183  time touch test.txt
+  184  time touchtest.txt
+  185  ls
+  186  rm rm 
+  187  time touch.txt
+  188  cd ~/Programming/
+  189  pwd
+  190  ls
+  191  cd /groups/cosem/cosem/ackermand/
+  192  ls
+  193  conda deactivate
+  194  conda activate multiresolution
+  195  ls
+  196  cd meshesForWebsite/
+  197  ls
+  198  cd multiresolution/
+  199  ls
+  200  cd HeLa2/
+  201  ls
+  202  cd scripts/
+  203  ls
+  204  cd testNewCode/
+  205  ls
+  206  vi er/workflow.yaml 
+  207  vi mito_cropped/workflow.yaml 
+  208  vi mito_cropped
+  209  bsub -n 2 -P cosem -q local launchflow -n 124 er
+  210  bsub -n 2 -P cosem -q local launchflow -n 124 mito_cropped
+  211  ls
+  212  bjobs
+  213  ls -ltr
+  214  tail mito_cropped-20210405.225837/workflow.yaml 
+  215  q!
+  216  tail mito_cropped-20210405.225837/output.log 
+  217  ls
+  218  grep -in labelcounts mito_cropped-20210405.111322/output.log 
+  219  bjobs
+  220  bkill 0
+  221  vi er/workflow.yaml 
+  222  time touch test.txt 
+  223  time rm test.txt 
+  224  time touch test.txt 
+  225  time rm test.txt 
+  226  time touch test.txt 
+  227  time rm test.txt 
+  228  time touch test.txt 
+  229  time rm test.txt 
+  230  time touch test.txt 
+  231  time rm test.txt 
+  232  time touch test.txt 
+  233  time rm test.txt 
+  234  time touch test.txt 
+  235  time rm test.txt 
+  236  time touch test.txt 
+  237  time rm test.txt 
+  238  time touch test.txt 
+  239  time rm test.txt 
+  240  time touch test.txt 
+  241  time rm test.txt 
+  242  time touch test.txt 
+  243  time rm test.txt 
+  244  time touch test.txt 
+  245  time rm test.txt 
+  246  time touch test.txt 
+  247  time rm test.txt 
+  248  time touch test.txt 
+  249  time rm test.txt 
+  250  time touch test.txt 
+  251  time rm test.txt 
+  252  time touch test.txt 
+  253  time rm test.txt 
+  254  time touch test.txt 
+  255  time rm test.txt 
+  256  time touch test.txt 
+  257  time rm test.txt 
+  258  time touch test.txt 
+  259  time rm test.txt 
+  260  time touch test.txt 
+  261  time rm test.txt 
+  262  time touch test.txt 
+  263  time rm test.txt 
+  264  time touch test.txt 
+  265  time rm test.txt 
+  266  time touch test.txt 
+  267  time rm test.txt 
+  268  time touch test.txt 
+  269  time rm test.txt 
+  270  time touch test.txt 
+  271  time rm test.txt 
+  272  ssh login2.int.janelia.org 
+  273  exit
+  274  ~/mongodb/mongodb-linux-x86_64-3.6.0/bin/mongo
+  275  cd ~/Programming/cosem-segmentation-analysis/
+  276  ls
+  277  git push
+  278  ls
+  279  cd COSEM/
+  280  matlab &
+  281  ls /groups/cosem/cosem/ackermand/forDavis
+  282  ls /groups/cosem/cosem/ackermand/forDavis/renumbered/jrc_hela-2/jrc_hela-2.n5/
+  283  ls /groups/cosem/cosem/ackermand/forDavis/renumbered/jrc_hela-2/jrc_hela-2.n5/
+  284  ls /groups/cosem/cosem/ackermand/forDavis/renumbered/jrc_hela-2/jrc_hela-2.n5/
+  285  cd /groups/cosem/cosem/ackermand/
+  286  ls
+  287  cd paperResultsWithFullPaths/
+  288  ls
+  289  cd ../forDatabase/
+  290  ls
+  291  ls -ltr
+  292  mv compiled backupCompiled
+  293  cd combined/
+  294  ls
+  295  ls -ltr
+  296  ls
+  297  cd ../
+  298  ls
+  299  cd backupCompiled/
+  300  ls
+  301  cd ../
+  302  ls
+  303  cd combined/
+  304  ls
+  305  cd ..
+  306  ls
+  307  tar -zcvf combined_20210316.tar.gz combined/
+  308  ls
+  309  du -h combined_20210316.tar.gz 
+  310  scp combined_20210316.tar.gz ackermand@vmdmz122:/data/import/
+  311  du -h combined_20210316.tar.gz 
+  312  rsync -a combined_20210316.tar.gz ackermand@vmdmz122:/data/import/
+  313  ls
+  314  ~/sublime_text_3/sublime_text &
+  315  cd combined
+  316  ls
+  317  vi jrc_macrophage-2\|mito.csv 
+  318  ls
+  319  pwd
+  320  vi jrc_macrophage-2\|mito.csv 
+  321  ls
+  322  vi 'jrc_macrophage-2|vesicle.csv'
+  323  cd ~/Programming/
+  324  cd curvature-analysis/
+  325  python3 forGithub.py 
+  326  python3 forGithub.py 
+  327  python3 forGithub.py 
+  328  python
+  329  cd ../database-compilation/
+  330  ls
+  331  python3 compileFiles.py 
+  332  ls /groups/cosem/cosem/ackermand/paperNeuroglancerVisualization.n5/
+  333  ls /groups/cosem/cosem/ackermand/paperNeuroglancerVisualization.n5/HeLa2_mito
+  334  ls /groups/cosem/cosem/ackermand/paperNeuroglancerVisualization.n5/HeLa2_mito/mesh 
+  335  ls /groups/cosem/cosem/ackermand/paperNeuroglancerVisualization.n5/
+  336  cd /groups/cosem/cosem/ackermand/paperNeuroglancerVisualization.n5/
+  337  vi ../cosem-meshes/jrc_hela-2/pm_seg-20210302.150545/
+  338  ln -s ../meshesForWebsite .
+  339  cd meshesForWebsite
+  340  ls
+  341  cd res2decimation0p10/
+  342  ls
+  343  cd jrc_hela-2/
+  344  ls
+  345  cd mito_seg/
+  346  ls
+  347  wd
+  348  cd ../../../
+  349  cd ../collected/renumbered/
+  350  cd HeLa2.n5/
+  351  ls
+  352  cd mito_cropped/
+  353  ls
+  354  vi /groups/cosem/cosem/ackermand/cosem-meshes/HeLa2/mito_seg/workflow.yaml 
+  355  vi /groups/cosem/cosem/ackermand/cosem-meshes/jrc_hela-2/mito_seg/workflow.yaml 
+  356  lx
+  357  ls
+  358  vi ../../../../../paperResultsWithFullPaths/renumbering/HeLa2/mito_cropped_renumbering.csv 
+  359  ls
+  360  ssh cosem-dmz
+  361  ssh cosem-dmz
+  362  cd combined
+  363  ls
+  364  find . -not -name "*contact*"
+  365  for file in find . -not -name "*contact*"; do echo $file; done
+  366  for file in find . -not -name "*contact*"; do cat $file | wc -l; ; done
+  367  for file in find . -not -name "*contact*"; do cat $file | wc -l; done
+  368  ls
+  369  cd ../
+  370  mkdir temp
+  371  cp -r combined/* temp/
+  372  cd temp/
+  373  ls
+  374  rm *contact*
+  375  ls
+  376  cat * | wc -l
+  377  ls -l | wc -l
+  378  vi 'jrc_hela-3|er-periph.csv'
+  379  head jrc_macrophage-2\|ribo.csv 
+  380   sort -k3n jrc_hela-2\|mito.csv |  uniq  -D
+  381   sort -k1n jrc_hela-2\|mito.csv |  uniq  -D
+  382  vi test.txt
+  383   sort -k1n test.txt |  uniq  -D
+  384   sort -k1n test.txt 
+  385   sort -k1n test.txt |  uniq  -f1 -D
+  386  cut -d, -f2 input.csv | sort | uniq -d | grep -Fv 2r
+  387  cut -d, -f1 test.txt | sort | uniq -d
+  388  cut -d, -f1 jrc_hela-2\|mito.csv | sort | uniq -d
+  389  for i in *; do echo $i; cut -d, -f1 $i | sort | uniq -d
+  390  for i in *; do echo $i; cut -d, -f1 $i | sort | uniq -d; done
+  391  vi jrc_hela-2\|mito.csv 
+  392  for i in *; do echo $i; cut -d, -f1 $i | sort | uniq -d; done
+  393  rm test.txt 
+  394  vi jrc_hela-2\|mito.csv 
+  395  vi jrc_hela-2\|mito.csv 
+  396  ls
+  397  ls
+  398  vi jrc_hela-2\|er_reconstructed.csv 
+  399  vi jrc_hela-2\|er_periph.csv 
+  400  vi jrc_hela-2\|er-periph.csv
+  401  cat jrc_choroid-plexus-2\|endo.csv | wc -l
+  402  cat jrc_choroid-plexus-2\|ribo.csv | wc -l
+  403  cat jrc_hela-3\|ribo.csv | wc -l
+  404  ls -l | wc -l
+  405  ls
+  406  vi jrc_hela-3\|mito.csv 
+  407  for i in *; do ls -l | wc -l
+  408  for i in *; do ls -l | wc -l; done
+  409  for i in *; do cat $i | wc -l; done
+  410  ls
+  411   "jrc_hela-1|er" 
+  412   "jrc_choroid-plexus-2|vesicle" 
+  413   "jrc_jurkat-1|eres" 
+  414   "jrc_hela-3|pm" 
+  415   "jrc_hela-2|lyso" 
+  416   "jrc_hela-2|er_reconstructed" 
+  417   "jrc_hela-3|ribo" 
+  418   "jrc_jurkat-1|nucleolus" 
+  419   "jrc_hela-2|cent-dapp" 
+  420   "jrc_hela-2|vesicle" 
+  421   "jrc_jurkat-1|nucleus" 
+  422   "jrc_hela-2|cent" 
+  423   "jrc_jurkat-1|endo" 
+  424   "jrc_macrophage-2|chrom" 
+  425   "jrc_hela-3|chrom" 
+  426   "jrc_hela-3|np" 
+  427   "jrc_hela-2|ribo" 
+  428   "jrc_hela-3|ecs" 
+  429    
+  430   "jrc_hela-2|er-periph" 
+  431   "jrc_macrophage-2|nucleolus" 
+  432  for i in { "jrc_hela-1|er" ;   "jrc_choroid-plexus-2|vesicle" 
+  433   "jrc_jurkat-1|eres" 
+  434   "jrc_hela-3|pm" 
+  435   "jrc_hela-2|lyso" 
+  436   "jrc_hela-2|er_reconstructed" 
+  437   "jrc_hela-3|ribo" 
+  438   "jrc_jurkat-1|nucleolus" 
+  439   "jrc_hela-2|cent-dapp" 
+  440   "jrc_hela-2|vesicle" 
+  441   "jrc_jurkat-1|nucleus" 
+  442   "jrc_hela-2|cent" 
+  443  vi order.txt
+  444  vi order.txt 
+  445  rm order.txt 
+  446  vi order.txt
+  447  ls
+  448  grep in 11119.28 *ribo.csv
+  449  grep -in 11119.28 *ribo.csv
+  450  grep -in "1166769" *ribo*
+  451  vi jrc_hela-2\|ribo.csv 
+  452  vi jrc_hela-2\|ribo.csv 
+  453  vi jrc_hela-2\|ribo.csv 
+  454  grep -in "1166769" *ribo*
+  455  vi jrc_hela-2\|ribo.csv 
+  456  vi jrc_hela-2\|ribo.csv 
+  457  cd ../backupCompiled/
+  458  ls
+  459  vi jrc_jurkat-1\:golgi.csv 
+  460  cd ../
+  461  ls
+  462  cd combined
+  463  ls -ltr
+  464  head 'jrc_macrophage-2|mt_pm_contacts.csv'
+  465  head 'jrc_macrophage-2|mt_pm_contacts.csv'
+  466  vi 'jrc_macrophage-2|mt_pm_contacts.csv'
+  467  vi 'jrc_macrophage-2|mt.csv'
+  468  cd ../../for
+  469  cd ../../
+  470  ls
+  471  cd forDavis/
+  472  cd renumbered/
+  473  ls
+  474  cd jrc_macrophage-2/
+  475  ls
+  476  cd jrc_macrophage-2.n5/
+  477  ls -l
+  478  cd ../../
+  479  ls
+  480  cd ../
+  481  ls
+  482  cd ../meshesForWebsite/
+  483  ls
+  484  cd jrc_ctl-id8_a01/
+  485  ls
+  486  cd 494_roi5_protrusions
+  487  ls
+  488  cd 410_roi1/
+  489  ls
+  490  cd ../../
+  491  cd 494_roi5_protrusions
+  492  ls
+  493  cd ../494_roi5_protrusions-20210309.165929/
+  494  ls
+  495  vi brick-mesh-stats/partition-00.csv 
+  496  ls
+  497  pwd
+  498  cd /groups/cosem/cosem/ackermand/paperResultsWithFullPaths/
+  499  ls
+  500  cd ~/Programming/
+  501  ls
+  502  pwd
+  503  ping http://10.150.100.248/
+  504  ping 10.150.100.248
+  505  ls
+  506  vi flyemflows/temp_data/images.n5/shapes/attributes.json 
+  507  ls
+  508  cd flyemflows/
+  509  ls
+  510  git diff
+  511  !
+  512  cd ../vol2mesh/
+  513  git diff
+  514  !
+  515  cd ../vol2mesh/
+  516  git diff
+  517  cat /groups/cosem/cosem/ackermand/paperResultsWithFullPaths/collected/renumbered/HeLa2.n5/attributes.json 
+  518  cat /groups/cosem/cosem/ackermand/paperResultsWithFullPaths/collected/renumbered/HeLa2.n5/er/attributes.json 
+  519  cat /groups/cosem/cosem/ackermand/paperResultsWithFullPaths/collected/HeLa2.n5/er/attributes.json 
+  520  diff ~/miniconda3/envs/multiresolution/
+  521  ls ~/miniconda3/envs/multiresolution/lib/python3.7/
+  522  ls ~/miniconda3/envs/multiresolution/lib/python3.7/site-packages/flyemflows/
+  523  ls ~/miniconda3/envs/multiresolution/lib/python3.7/site-packages/flyemflows/workflow/createmeshes.py ../flyemflows/flyemflows/workflow/createmeshes.py 
+  524  diff ~/miniconda3/envs/multiresolution/lib/python3.7/site-packages/flyemflows/workflow/createmeshes.py ../flyemflows/flyemflows/workflow/createmeshes.py 
+  525  diff ~/miniconda3/envs/multiresolution/lib/python3.7/site-packages/vol2mesh/mesh.py ../vol2mesh/vol2mesh/mesh.py 
+  526  ls -ltr
+  527  cd ../flyemflows/
+  528  ls
+  529  cd flyemflows
+  530  ls
+  531  cd workflow/
+  532  grep -in "took" createmeshes.py 
+  533  grep -in "bricwise meshes" createmeshes.py 
+  534  grep -in "brickwise meshes" createmeshes.py 
+  535  vi createmeshes.py 
+  536  conda activate flyem
+  537  git add -A :.
+  538  git add -A :/
+  539  git commit -m "added trimming so don't get flared edges"
+  540  git push
+  541  cd ../../../vol2mesh/
+  542  ls
+  543  cd vol2mesh
+  544  ls
+  545  git diff
+  546  git commit -m
+  547  git commit -m "updated call to draco compression and added trimming to prevent flared edges"
+  548  git add -A:/
+  549  git add -A :/
+  550  git commit -m "updated call to draco compression and added trimming to prevent flared edges"
+  551  git push
+  552  cd ../../dvidutils/
+  553  ls
+  554  git add -A :/
+  555  git commit -m "updated draco compression quantizer"
+  556  git push
+  557  pwd
+  558  ls
+  559  cd ../flyemflows/
+  560  ls
+  561  conda activate multiresolution
+  562  vi flyemflows/workflow/createmeshes.py 
+  563  vi ../vol2mesh/vol2mesh/mesh.py 
+  564  vi flyemflows/workflow/createmeshes.py 
+  565  pip install .
+  566  git diff
+  567  ls
+  568  conda deactivate
+  569  ls -ltr /groups/cosem/cosem/ackermand/meshesForWebsite/multiresolution/HeLa2/meshes/
+  570  cd /groups/cosem/cosem/ackermand/meshesForWebsite/multiresolution/HeLa2/meshes/
+  571  ls
+  572  cd ../
+  573  ls
+  574  cd meshes/
+  575  ls
+  576  cd er_decAndSmooth/
+  577  ls
+  578  cd ../
+  579  ls
+  580  ls -ltr
+  581  cd ../scripts/
+  582  cd n
+  583  ls
+  584  cd testNewCode/
+  585  ls
+  586  ls -ltr
+  587  cd er-20210406.201336/brick-mesh-stats-lod-0/
+  588  ls
+  589  ls -ltr
+  590  ls -l | wc -l
+  591  ls -ltr
+  592  cd ..
+  593  ls
+  594  cd ~/Programming/flyemflows/
+  595  ls
+  596  history > hist.txt

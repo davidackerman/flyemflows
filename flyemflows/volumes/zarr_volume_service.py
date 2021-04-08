@@ -194,7 +194,7 @@ class ZarrVolumeService(VolumeServiceWriter):
 
         # The notion of 'block-width' doesn't really make sense if the chunks aren't cubes,
         # but we'll assume the user has chosen something reasonable and just use the minimum chunk dimension.
-        block_width = min(chunk_shape)
+        block_width = int(min(chunk_shape))
 
         global_offset = np.array(volume_config["zarr"]["global-offset"][::-1])
         auto_bb = np.array([(0,0,0), self.zarr_dataset(0).shape])

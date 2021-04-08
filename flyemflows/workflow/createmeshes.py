@@ -502,7 +502,6 @@ class CreateMeshes(Workflow):
             -
         """
         self._sanitize_config()
-        self._init_input_service()
         self._prepare_output()
 
         rescale_levels = [self.config["input"]["adapters"]["rescale-level"]["level"]]
@@ -513,6 +512,7 @@ class CreateMeshes(Workflow):
             self.config["input"]["adapters"]["rescale-level"]["lods"] = rescale_levels
 
         for rescale_level in rescale_levels:
+            self._init_input_service()
             self.config["input"]["adapters"]["rescale-level"]["level"] = rescale_level
             self.config["createmeshes"]["pre-stitch-parameters"]["decimation"] = min(base_decimation*2**rescale_level,1.0)
 
@@ -1358,6 +1358,9 @@ def compute_meshes_for_brick(brick, stats_df, options):
     decimation = options["pre-stitch-parameters"]["decimation"]
     max_vertices = options["pre-stitch-parameters"]["max-vertices"]
     rescale_factor = options["rescale-before-write"]
+    do_trim = False
+    if options["stitch-method"]=="multires":
+        do_trim = True
 
     #TODO: need to handle rescale factor for multires
     if isinstance(rescale_factor, list):
@@ -1399,7 +1402,7 @@ def compute_meshes_for_brick(brick, stats_df, options):
             mask = (volume == row.sv)
             mask, mask_box = crop(mask, brick.physical_box)
 
-            args = (row.sv, row.body, mask, mask_box, row.mesh_origin, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, False)
+            args = (row.sv, row.body, mask, mask_box, row.mesh_origin, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, do_trim, False)
             mesh_results.append( generate_mesh(*args) )
     else:
         # Parallelize using dask's ability to launch tasks-within-tasks
@@ -1417,7 +1420,7 @@ def compute_meshes_for_brick(brick, stats_df, options):
                 # mostly to save RAM if there are lots of tasks that end up on one node.
                 compressed_mask = lz4.frame.compress(np.asarray(mask, order='C'))
  
-                args = (row.sv, row.body, compressed_mask, mask_box, row.mesh_origin, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, True)
+                args = (row.sv, row.body, compressed_mask, mask_box, row.mesh_origin, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, do_trim, True)
 
                 # Apparently the delayed() approach doesn't work
                 # (I get errors "Workers don't have promised key")
@@ -1439,7 +1442,7 @@ def compute_meshes_for_brick(brick, stats_df, options):
     return pd.DataFrame(mesh_results, columns=cols).astype(dtypes)
 
 
-def generate_mesh(sv, body, mask, mask_box, mesh_origin, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, compressed=False):
+def generate_mesh(sv, body, mask, mask_box, mesh_origin, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, do_trim=False, compressed=False):
     if compressed:
         mask_shape = box_shape(mask_box)
         mask = np.frombuffer(lz4.frame.decompress(mask), np.bool).reshape(mask_shape)
@@ -1461,18 +1464,34 @@ def generate_mesh(sv, body, mask, mask_box, mesh_origin, fragment_shape, fragmen
     if (rescale_factor != 1.0).any():
         mesh.vertices_zyx[:] *= rescale_factor
 
+    #if do_trim:
+    #    mesh.trim()
+    
     vertex_count = len(mesh.vertices_zyx)
     compressed_size = mesh.compress()
 
     return sv, body, mesh, vertex_count, compressed_size
 
 def serialize_custom_drc(sv, meshes, path=None):
-    serialized_bytes = bytearray()
+    
+    print(f"serializing mesh {sv}")
+    serialized_bytes=bytearray()
+    mesh_bytes = []
     for mesh in meshes:
         mesh.trim()
         mesh.compress('custom_draco')
-        serialized_bytes.extend( mesh.draco_bytes )
-       
+        mesh_bytes.append( len(mesh.draco_bytes) )
+        serialized_bytes.extend(mesh.draco_bytes)
+    
+    #serialized_bytes = bytearray(sum(mesh_bytes))
+    #start_byte=0
+    #end_byte=0
+    #for idx,mesh in enumerate(meshes):
+    #    end_byte += mesh_bytes[idx] 
+    #    serialized_bytes[start_byte:end_byte-1] =  mesh.draco_bytes
+    #    start_byte = end_byte
+
+    print(f"serialized mesh {sv}")
     return serialized_bytes
 
 def serialize_mesh(sv, mesh, path=None, fmt=None, log=True):
