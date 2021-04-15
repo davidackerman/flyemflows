@@ -33,6 +33,7 @@ from . import Workflow
 
 import struct
 import json
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -506,15 +507,17 @@ class CreateMeshes(Workflow):
 
         rescale_levels = [self.config["input"]["adapters"]["rescale-level"]["level"]]
         base_decimation =  self.config["createmeshes"]["pre-stitch-parameters"]["decimation"]
+        base_halo = self.config["createmeshes"]["halo"]
         if "lods" in self.config["input"]["adapters"]["rescale-level"]:
             rescale_levels = self.config["input"]["adapters"]["rescale-level"]["lods"]
             rescale_levels.sort()
             self.config["input"]["adapters"]["rescale-level"]["lods"] = rescale_levels
 
         for rescale_level in rescale_levels:
-            self._init_input_service()
             self.config["input"]["adapters"]["rescale-level"]["level"] = rescale_level
             self.config["createmeshes"]["pre-stitch-parameters"]["decimation"] = min(base_decimation*2**rescale_level,1.0)
+            #self.config["createmeshes"]["halo"] = base_halo/2**rescale_level # ensures that each box spans same voxels across scales
+            self._init_input_service()
 
             subset_supervoxels, existing_svs = self._load_subset_supervoxels()
             batch_size = self.config["createmeshes"]["subset-batch-size"]
@@ -552,6 +555,9 @@ class CreateMeshes(Workflow):
                     with Timer(f"Batch {batch_index:02}: Running batch", logger):
                         with switch_cwd(f'batch-{batch_index:02d}', create=True):
                             self.execute_batch(batch_index, bricks_ddf, batch_subset_svs, batch_existing_svs)
+        
+        #remove now unnecessary index files:
+        os.system(f'rm {self.config["output"]["directory"]}/*.index_*') 
 
     def execute_batch(self, batch_index, bricks_ddf, subset_supervoxels, existing_svs):
         brick_counts_df = self._compute_brick_labelcounts(batch_index, bricks_ddf, subset_supervoxels)
@@ -838,17 +844,13 @@ class CreateMeshes(Workflow):
                 total_sv_counts = brick_counts_df.groupby('sv')['count'].sum().rename('sv_size').reset_index()
                 total_body_counts = total_sv_counts.rename(columns={'sv': 'body', 'sv_size': 'body_size'})
 
-            sv_origins = brick_counts_df.groupby('sv')['lz0','ly0','lx0'].min().rename(columns = {'lz0':'lz0_min','ly0':'ly0_min','lx0':'lx0_min'}).reset_index()
-
             brick_counts_df = brick_counts_df.merge(total_sv_counts, 'left', 'sv')
             brick_counts_df = brick_counts_df.merge(total_body_counts, 'left', 'body')
-            brick_counts_df = brick_counts_df.merge(sv_origins, 'left', 'sv')
 
         with Timer(f"Batch {batch_index:02}: Exporting brick sv/body sizes", logger):
             np.save('brick-counts.npy', brick_counts_df.to_records(index=False))
             np.save('sv-sizes.npy', total_sv_counts.to_records(index=False))
             np.save('body-sizes.npy', total_body_counts.to_records(index=False))
-            np.save('sv-origins.npy', sv_origins.to_records(index=False))
 
         return brick_counts_df
 
@@ -926,7 +928,7 @@ class CreateMeshes(Workflow):
         """
         with Timer(f"Batch {batch_index:02}: Distributing counts", logger):
             brick_counts_grouped_df = (brick_counts_df
-                                        .groupby('brick_index')[['sv_size', 'body', 'body_size','lz0_min','ly0_min','lx0_min','sv']]
+                                        .groupby('brick_index')[['sv_size', 'body', 'body_size','sv']]
                                         .agg(list)
                                         .reset_index())
 
@@ -943,11 +945,8 @@ class CreateMeshes(Workflow):
                     for svs, sv_sizes, bodies, body_sizes in zip(iter_batches(row.sv, max_svs_per_brick),
                                                                  iter_batches(row.sv_size, max_svs_per_brick),
                                                                  iter_batches(row.body, max_svs_per_brick),
-                                                                 iter_batches(row.body_size, max_svs_per_brick),
-                                                                 iter_batches(row.lz0_min, max_svs_per_brick),
-                                                                 iter_batches(row.ly0_min, max_svs_per_brick),
-                                                                 iter_batches(row.lx0_min, max_svs_per_brick)):
-                        split_rows.append((row.brick_index, svs, sv_sizes, bodies, body_sizes, len(svs), lz0_min, ly0_min, lx0_min ))
+                                                                 iter_batches(row.body_size, max_svs_per_brick)):
+                        split_rows.append((row.brick_index, svs, sv_sizes, bodies, body_sizes, len(svs) ))
 
                 split_df = pd.DataFrame(split_rows, columns=brick_counts_grouped_df.columns)
                 split_df = split_df.astype(brick_counts_grouped_df.dtypes.to_dict())
@@ -984,7 +983,7 @@ class CreateMeshes(Workflow):
 
     def _compute_brickwise_meshes(self, batch_index, bricks_ddf, num_brick_meshes, num_bricks, num_unique_bricks):
         options = self.config["createmeshes"]
-        
+        rescale_level = self.config["input"]["adapters"]["rescale-level"]["level"]
         def compute_meshes_for_bricks(bricks_partition_df):
             assert len(bricks_partition_df) > 0, "partition is empty" # drop_empty_partitions() should have eliminated these.
             result_dfs = []
@@ -992,25 +991,23 @@ class CreateMeshes(Workflow):
                 brick_shape = row.brick.logical_box[1] - row.brick.logical_box[0]
                 assert len(row.sv) > 0
                 #TODO : fix this so don't have to specify index 0 but rather it is assigned correctly
-                mesh_origin = []
                 fragment_origin = []
                 fragment_shape = []
                 for i in range(len(row.sv)):
-                    mesh_origin.append(np.array([row.lx0_min[i], row.ly0_min[i], row.lz0_min[i]]))
                     fragment_origin.append(np.array([row.lx0, row.ly0, row.lz0]))
                     fragment_shape.append(brick_shape)
-    
+
                 stats_df = pd.DataFrame({'sv': row.sv, 'sv_size': row.sv_size, 
-                                         'mesh_origin':mesh_origin, 'fragment_shape':fragment_shape, 'fragment_origin':fragment_origin,
+                                         'fragment_shape':fragment_shape, 'fragment_origin':fragment_origin,
                                          'body': row.body, 'body_size': row.body_size})
 
                 dtypes = {'sv': np.uint64, 'sv_size': np.uint64, 
-                          'mesh_origin': object, 'fragment_shape': object, 'fragment_origin':object, 
+                          'fragment_shape': object, 'fragment_origin':object, 
                           'body': np.uint64, 'body_size': np.uint64}
                     
                 stats_df = stats_df.astype(dtypes)
 
-                brick_meshes_df = compute_meshes_for_brick(row.brick, stats_df, options)
+                brick_meshes_df = compute_meshes_for_brick(row.brick, stats_df, options, rescale_level)
                 brick_meshes_df['lz0'] = row.lz0
                 brick_meshes_df['ly0'] = row.ly0
                 brick_meshes_df['lx0'] = row.lx0
@@ -1152,44 +1149,44 @@ class CreateMeshes(Workflow):
                 json.dump(info, f)
 
         def write_index_file(path, meshes, current_lod, lods):
+            lods = [lod for lod in lods if lod <=current_lod] # since we don't know if the lowest res ones will have meshes for all svs
             #currently only implemented for single res
             template = meshes[0]
             chunk_shape = template.fragment_shape
-            grid_origin = template.mesh_origin
+            grid_origin = np.zeros(3)
             lod_scales = np.array([2**lod for lod in lods])
             num_lods = len(lod_scales)
             vertex_offsets = np.array([[0.,0.,0.] for _ in range(num_lods)])
-            num_fragments_per_lod = np.array([len(meshes)])
+            num_fragments_per_lod = np.array([len(meshes) ])
             fragment_positions = []
             fragment_offsets = []
             for mesh in meshes:
-                fragment_positions.append( (mesh.fragment_origin - mesh.mesh_origin)/mesh.fragment_shape )
+                fragment_positions.append( mesh.fragment_origin//mesh.fragment_shape )
                 fragment_offsets.append(len(mesh.draco_bytes))
 
             fragment_positions = np.array(fragment_positions)
             fragment_offsets = np.array(fragment_offsets)
 
             #print(f"{path} lod({current_lod}) {num_fragments_per_lod} {chunk_shape} {grid_origin} {vertex_offsets} {fragment_positions.T.astype('<I')} {fragment_offsets.astype('<I')}")
-            with open(f"{path}.index_1", 'ab') as f:
-                if current_lod == lods[0]: #then is highest res lod
+            if current_lod == lods[0]: #then is highest res lod
+                with open(f"{path}.index_1", 'wb') as f:
                     f.write(chunk_shape.astype('<f').tobytes())
                     f.write(grid_origin.astype('<f').tobytes())
-                    f.write(struct.pack('<I', num_lods))
-                    f.write(lod_scales.astype('<f').tobytes())
-                    f.write(vertex_offsets.astype('<f').tobytes(order='C'))
+
+            with open(f"{path}.index_2", 'wb') as f:
+                f.write(struct.pack('<I', num_lods))
+                f.write(lod_scales.astype('<f').tobytes())
+                f.write(vertex_offsets.astype('<f').tobytes(order='C'))
+
+            with open(f"{path}.index_3", 'ab') as f:
                 f.write(num_fragments_per_lod.astype('<I').tobytes())
             
-            with  open(f"{path}.index_2", 'ab') as f:
+            with  open(f"{path}.index_4", 'ab') as f:
                 f.write(fragment_positions.T.astype('<I').tobytes(order='C'))
                 f.write(fragment_offsets.astype('<I').tobytes(order='C'))
-            
-            if current_lod == lods[-1]: #then is lowest res and need to finish
-                os.system(f"cat {path}.index_1 {path}.index_2 > {path}.index")
-                os.remove(f"{path}.index_1")
-                os.remove(f"{path}.index_2")
 
+            os.system(f"cat {path}.index_1 {path}.index_2 {path}.index_3 {path}.index_4 > {path}.index") #cat every time in case this is the last lod that contains this sv's mesh
 
-        
         options = self.config["createmeshes"]
         fmt = options["format"]
         include_empty = options["include-empty"]
@@ -1351,7 +1348,7 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, outpu
         return df
 
 
-def compute_meshes_for_brick(brick, stats_df, options):
+def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
     logging.getLogger(__name__).info(f"Computing meshes for brick: {brick} ({len(stats_df)} meshes)")
 
     smoothing = options["pre-stitch-parameters"]["smoothing"]
@@ -1402,7 +1399,7 @@ def compute_meshes_for_brick(brick, stats_df, options):
             mask = (volume == row.sv)
             mask, mask_box = crop(mask, brick.physical_box)
 
-            args = (row.sv, row.body, mask, mask_box, row.mesh_origin, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, do_trim, False)
+            args = (row.sv, row.body, mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim, False)
             mesh_results.append( generate_mesh(*args) )
     else:
         # Parallelize using dask's ability to launch tasks-within-tasks
@@ -1420,7 +1417,7 @@ def compute_meshes_for_brick(brick, stats_df, options):
                 # mostly to save RAM if there are lots of tasks that end up on one node.
                 compressed_mask = lz4.frame.compress(np.asarray(mask, order='C'))
  
-                args = (row.sv, row.body, compressed_mask, mask_box, row.mesh_origin, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, do_trim, True)
+                args = (row.sv, row.body, compressed_mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim, True)
 
                 # Apparently the delayed() approach doesn't work
                 # (I get errors "Workers don't have promised key")
@@ -1442,7 +1439,7 @@ def compute_meshes_for_brick(brick, stats_df, options):
     return pd.DataFrame(mesh_results, columns=cols).astype(dtypes)
 
 
-def generate_mesh(sv, body, mask, mask_box, mesh_origin, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, do_trim=False, compressed=False):
+def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim=False, compressed=False):
     if compressed:
         mask_shape = box_shape(mask_box)
         mask = np.frombuffer(lz4.frame.decompress(mask), np.bool).reshape(mask_shape)
@@ -1450,7 +1447,7 @@ def generate_mesh(sv, body, mask, mask_box, mesh_origin, fragment_shape, fragmen
     # Since vol2mesh.Mesh.from_binary_vol() uses the 'ilastik' method
     # by default, it supports smoothing natively.
     # It's ~2x faster to do it there instead of via a separate step.
-    mesh = Mesh.from_binary_vol(mask, mask_box, mesh_origin=mesh_origin, fragment_shape=fragment_shape, fragment_origin=fragment_origin, smoothing_rounds=smoothing)
+    mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, rescale_level = rescale_level, smoothing_rounds=smoothing)
     # if smoothing != 0:
     #     mesh.laplacian_smooth(smoothing)
 
@@ -1474,14 +1471,26 @@ def generate_mesh(sv, body, mask, mask_box, mesh_origin, fragment_shape, fragmen
 
 def serialize_custom_drc(sv, meshes, path=None):
     
-    print(f"serializing mesh {sv}")
+    len_meshes = len(meshes)
+    print(f"serializing mesh {sv} {len_meshes}")
     serialized_bytes=bytearray()
     mesh_bytes = []
-    for mesh in meshes:
+    for idx,mesh in enumerate(meshes):
+        t0 = time.time()
+        print(f"serializing mesh start ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
         mesh.trim()
+        t1 = time.time()
+        print(f"{t1-t0} serializing mesh trimmed {sv},{idx},{idx/len_meshes}")
         mesh.compress('custom_draco')
+        t2 = time.time()
+        print(f"{t2-t1} serializing mesh compressed {sv},{idx},{idx/len_meshes}")
         mesh_bytes.append( len(mesh.draco_bytes) )
+        t3 = time.time()
+        print(f"{t3-t2} serializing mesh appended {sv},{idx},{idx/len_meshes}")
         serialized_bytes.extend(mesh.draco_bytes)
+        t4 = time.time()
+        print(f"{t4-t3} serializing mesh extended {sv},{idx},{idx/len_meshes}")
+        del(mesh)
     
     #serialized_bytes = bytearray(sum(mesh_bytes))
     #start_byte=0

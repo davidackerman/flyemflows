@@ -151,6 +151,7 @@ class ScaledVolumeService(VolumeServiceWriter):
             orig_data = self.original_volume_service.get_subvolume(orig_box_zyx, best_base_scale)
 
             if self.method:
+                #print(f"orig_data.shape: {scale}, {box_zyx}, {orig_box_zyx}, {orig_data.shape}, {delta_from_best}")
                 downsampled_data = downsample( orig_data, 2**delta_from_best, self.method )
             elif np.dtype(self.dtype) == np.uint64:
                 # Assume that uint64 means labels.
