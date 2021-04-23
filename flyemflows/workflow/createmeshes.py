@@ -1081,7 +1081,7 @@ class CreateMeshes(Workflow):
             if stitch_method == 'multires':
                 # Bricks are always size of n5 attributes dimensions, so we need to concatenate lower res meshes
                 # into larger bricks
-                concatenated_mesh_bytes = Mesh.concatenate_mesh_bytes(sv_brick_meshes_df['mesh'], current_lod, highest_res_lod)
+                concatenated_mesh_bytes = Mesh.concatenate_mesh_bytes(sv_brick_meshes_df['mesh'], sv_brick_meshes_df['vertex_count'],  current_lod, highest_res_lod)
                 return pd.DataFrame({'sv': sv,
                                 'mesh': concatenated_mesh_bytes,
                                 'vertex_count': 0,
@@ -1151,6 +1151,7 @@ class CreateMeshes(Workflow):
         def write_index_file(path, meshes, current_lod, lods):
             lods = [lod for lod in lods if lod <=current_lod] # since we don't know if the lowest res ones will have meshes for all svs
             #currently only implemented for single res
+            meshes = [mesh for mesh in meshes if mesh.draco_bytes is not None]
             template = meshes[0]
             chunk_shape = template.fragment_shape
             grid_origin = np.zeros(3)
@@ -1480,16 +1481,17 @@ def serialize_custom_drc(sv, meshes, path=None):
         print(f"serializing mesh start ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
         mesh.trim()
         t1 = time.time()
-        print(f"{t1-t0} serializing mesh trimmed {sv},{idx},{idx/len_meshes}")
-        mesh.compress('custom_draco')
-        t2 = time.time()
-        print(f"{t2-t1} serializing mesh compressed {sv},{idx},{idx/len_meshes}")
-        mesh_bytes.append( len(mesh.draco_bytes) )
-        t3 = time.time()
-        print(f"{t3-t2} serializing mesh appended {sv},{idx},{idx/len_meshes}")
-        serialized_bytes.extend(mesh.draco_bytes)
-        t4 = time.time()
-        print(f"{t4-t3} serializing mesh extended {sv},{idx},{idx/len_meshes}")
+        print(f"{t1-t0} serializing mesh trimmed ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
+        if len(mesh.vertices_zyx)>0:
+            mesh.compress('custom_draco')
+            t2 = time.time()
+            print(f"{t2-t1} serializing mesh compressed {sv},{idx},{idx/len_meshes}")
+            mesh_bytes.append( len(mesh.draco_bytes) )
+            t3 = time.time()
+            print(f"{t3-t2} serializing mesh appended {sv},{idx},{idx/len_meshes}")
+            serialized_bytes.extend(mesh.draco_bytes)
+            t4 = time.time()
+            print(f"{t4-t3} serializing mesh extended {sv},{idx},{idx/len_meshes}")
         del(mesh)
     
     #serialized_bytes = bytearray(sum(mesh_bytes))
