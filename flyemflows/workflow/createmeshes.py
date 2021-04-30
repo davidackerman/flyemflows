@@ -505,17 +505,18 @@ class CreateMeshes(Workflow):
         self._sanitize_config()
         self._prepare_output()
 
-        rescale_levels = [self.config["input"]["adapters"]["rescale-level"]["level"]]
+        rescale_level = [self.config["input"]["adapters"]["rescale-level"]["level"]]
         base_decimation =  self.config["createmeshes"]["pre-stitch-parameters"]["decimation"]
         base_halo = self.config["createmeshes"]["halo"]
         if "lods" in self.config["input"]["adapters"]["rescale-level"]:
-            rescale_levels = self.config["input"]["adapters"]["rescale-level"]["lods"]
-            rescale_levels.sort()
-            self.config["input"]["adapters"]["rescale-level"]["lods"] = rescale_levels
+            lods = self.config["input"]["adapters"]["rescale-level"]["lods"]
+            lods.sort()
+            self.config["input"]["adapters"]["rescale-level"]["lods"] = lods
 
-        for rescale_level in rescale_levels:
-            self.config["input"]["adapters"]["rescale-level"]["level"] = rescale_level
-            self.config["createmeshes"]["pre-stitch-parameters"]["decimation"] = min(base_decimation*2**rescale_level,1.0)
+        for lod in lods:
+            self.config["input"]["adapters"]["rescale-level"]["level"] = 0 #rescale_level
+            self.config["input"]["adapters"]["rescale-level"]["current-lod"] = lod
+            self.config["createmeshes"]["pre-stitch-parameters"]["decimation"] = base_decimation/(2**lod) #min(base_decimation*2**rescale_level,1.0)
             #self.config["createmeshes"]["halo"] = base_halo/2**rescale_level # ensures that each box spans same voxels across scales
             self._init_input_service()
 
@@ -573,11 +574,11 @@ class CreateMeshes(Workflow):
         release_collection(bricks_ddf)
         del bricks_ddf
         # TODO: max-body-vertices (before assembly...)
-
+        
         sv_meshes_ddf = self._combine_brick_meshes(batch_index, brick_meshes_ddf)
         release_collection(brick_meshes_ddf)
         del brick_meshes_ddf
-
+        print("combined....")
         # TODO: Repartition?
 
         self._write_meshes(batch_index, sv_meshes_ddf, subset_supervoxels, existing_svs)
@@ -983,7 +984,8 @@ class CreateMeshes(Workflow):
 
     def _compute_brickwise_meshes(self, batch_index, bricks_ddf, num_brick_meshes, num_bricks, num_unique_bricks):
         options = self.config["createmeshes"]
-        rescale_level = self.config["input"]["adapters"]["rescale-level"]["level"]
+        lod = self.config["input"]["adapters"]["rescale-level"]["current-lod"]
+
         def compute_meshes_for_bricks(bricks_partition_df):
             assert len(bricks_partition_df) > 0, "partition is empty" # drop_empty_partitions() should have eliminated these.
             result_dfs = []
@@ -1007,7 +1009,7 @@ class CreateMeshes(Workflow):
                     
                 stats_df = stats_df.astype(dtypes)
 
-                brick_meshes_df = compute_meshes_for_brick(row.brick, stats_df, options, rescale_level)
+                brick_meshes_df = compute_meshes_for_brick(row.brick, stats_df, options, lod)
                 brick_meshes_df['lz0'] = row.lz0
                 brick_meshes_df['ly0'] = row.ly0
                 brick_meshes_df['lx0'] = row.lx0
@@ -1052,7 +1054,7 @@ class CreateMeshes(Workflow):
 
         stitch_method = options["stitch-method"]
 
-        current_lod = self.config["input"]["adapters"]["rescale-level"]["level"]
+        current_lod = self.config["input"]["adapters"]["rescale-level"]["current-lod"]
         highest_res_lod = self.config["input"]["adapters"]["rescale-level"]["lods"][0] if "lods" in self.config["input"]["adapters"]["rescale-level"] else None
 
         def assemble_sv_meshes(sv_brick_meshes_df):
@@ -1081,7 +1083,9 @@ class CreateMeshes(Workflow):
             if stitch_method == 'multires':
                 # Bricks are always size of n5 attributes dimensions, so we need to concatenate lower res meshes
                 # into larger bricks
+
                 concatenated_mesh_bytes = Mesh.concatenate_mesh_bytes(sv_brick_meshes_df['mesh'], sv_brick_meshes_df['vertex_count'],  current_lod, highest_res_lod)
+
                 return pd.DataFrame({'sv': sv,
                                 'mesh': concatenated_mesh_bytes,
                                 'vertex_count': 0,
@@ -1152,6 +1156,7 @@ class CreateMeshes(Workflow):
             lods = [lod for lod in lods if lod <=current_lod] # since we don't know if the lowest res ones will have meshes for all svs
             #currently only implemented for single res
             meshes = [mesh for mesh in meshes if mesh.draco_bytes is not None]
+            print(f"mesh length {len(meshes)}")
             template = meshes[0]
             chunk_shape = template.fragment_shape
             grid_origin = np.zeros(3)
@@ -1195,7 +1200,7 @@ class CreateMeshes(Workflow):
         destination = self.config["output"]
         resource_mgr = self.resource_mgr_client
 
-        current_lod = self.config["input"]["adapters"]["rescale-level"]["level"]
+        lod = self.config["input"]["adapters"]["rescale-level"]["current-lod"]
         lods = self.config["input"]["adapters"]["rescale-level"]["lods"] if "lods" in self.config["input"]["adapters"]["rescale-level"] else []
 
         def write_sv_meshes(sv_meshes_df, log=True):
@@ -1223,7 +1228,7 @@ class CreateMeshes(Workflow):
                         f.write(mesh_bytes)
                     
                     if fmt=="custom_drc":
-                        write_index_file(path, sv_meshes_df['mesh'].iloc[idx], current_lod, lods)
+                        write_index_file(path, sv_meshes_df['mesh'].iloc[idx], lod, lods)
                         write_info_file(destination['directory'] )
                     idx+=1
             else:
@@ -1349,7 +1354,7 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, outpu
         return df
 
 
-def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
+def compute_meshes_for_brick(brick, stats_df, options, lod):
     logging.getLogger(__name__).info(f"Computing meshes for brick: {brick} ({len(stats_df)} meshes)")
 
     smoothing = options["pre-stitch-parameters"]["smoothing"]
@@ -1400,7 +1405,7 @@ def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
             mask = (volume == row.sv)
             mask, mask_box = crop(mask, brick.physical_box)
 
-            args = (row.sv, row.body, mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim, False)
+            args = (row.sv, row.body, mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, lod, do_trim, False)
             mesh_results.append( generate_mesh(*args) )
     else:
         # Parallelize using dask's ability to launch tasks-within-tasks
@@ -1418,7 +1423,7 @@ def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
                 # mostly to save RAM if there are lots of tasks that end up on one node.
                 compressed_mask = lz4.frame.compress(np.asarray(mask, order='C'))
  
-                args = (row.sv, row.body, compressed_mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim, True)
+                args = (row.sv, row.body, compressed_mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, lod, do_trim, True)
 
                 # Apparently the delayed() approach doesn't work
                 # (I get errors "Workers don't have promised key")
@@ -1440,7 +1445,7 @@ def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
     return pd.DataFrame(mesh_results, columns=cols).astype(dtypes)
 
 
-def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim=False, compressed=False):
+def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, lod, do_trim=False, compressed=False):
     if compressed:
         mask_shape = box_shape(mask_box)
         mask = np.frombuffer(lz4.frame.decompress(mask), np.bool).reshape(mask_shape)
@@ -1448,16 +1453,22 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
     # Since vol2mesh.Mesh.from_binary_vol() uses the 'ilastik' method
     # by default, it supports smoothing natively.
     # It's ~2x faster to do it there instead of via a separate step.
-    mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, rescale_level = rescale_level, smoothing_rounds=smoothing)
+    mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, lod = lod, smoothing_rounds=smoothing)
     # if smoothing != 0:
     #     mesh.laplacian_smooth(smoothing)
-
+    
     if max_vertices != 0 and len(mesh.vertices_zyx) > max_vertices:
         decimation = min( decimation, max_vertices / len(mesh.vertices_zyx) )
 
     # Don't bother decimating really tiny meshes -- something usually goes wrong anyway.
     if decimation != 1.0 and len(mesh.vertices_zyx) > 10:
-        mesh.simplify_openmesh(decimation)
+        original_vertices = mesh.vertices_zyx
+        mesh.trim()
+        mesh.simplify_open3d(decimation)
+        final_vertices = mesh.vertices_zyx
+        same_as_before = len([final_v for final_v in final_vertices if final_v in original_vertices ])
+        print(f"len mesh {len(original_vertices)} {decimation} {len(final_vertices)}  {same_as_before}")
+
 
     if (rescale_factor != 1.0).any():
         mesh.vertices_zyx[:] *= rescale_factor
@@ -1480,9 +1491,16 @@ def serialize_custom_drc(sv, meshes, path=None):
         t0 = time.time()
         print(f"serializing mesh start ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
         mesh.trim()
+
         t1 = time.time()
         print(f"{t1-t0} serializing mesh trimmed ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
         if len(mesh.vertices_zyx)>0:
+            #original_vertices = mesh.vertices_zyx
+            #mesh.simplify_open3d(0.2)
+            #final_vertices = mesh.vertices_zyx
+            #same_as_before = len([final_v for final_v in final_vertices if final_v in original_vertices ])
+            #print(f"len mesh {len(original_vertices)} {len(final_vertices)}  {same_as_before}")
+
             mesh.compress('custom_draco')
             t2 = time.time()
             print(f"{t2-t1} serializing mesh compressed {sv},{idx},{idx/len_meshes}")
@@ -1539,6 +1557,6 @@ def serialize_mesh(sv, mesh, path=None, fmt=None, log=True):
 
 def mkdir(config, name, exist_ok=False):
     if "lods" in config["input"]["adapters"]["rescale-level"]:
-        name+="-lod-"+str(config["input"]["adapters"]["rescale-level"]["level"])
+        name+="-lod-"+str(config["input"]["adapters"]["rescale-level"]["current-lod"])
     os.makedirs(name, exist_ok=exist_ok)
     return name
