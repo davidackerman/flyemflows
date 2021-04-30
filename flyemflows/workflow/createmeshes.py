@@ -1085,6 +1085,9 @@ class CreateMeshes(Workflow):
                 # into larger bricks
 
                 concatenated_mesh_bytes = Mesh.concatenate_mesh_bytes(sv_brick_meshes_df['mesh'], sv_brick_meshes_df['vertex_count'],  current_lod, highest_res_lod)
+                for mesh in concatenated_mesh_bytes[0]:
+                    print(f"about to stitch {mesh} {type(mesh)}")
+                    mesh.stitch_adjacent_faces(drop_unused_vertices=True, drop_duplicate_faces=True)
 
                 return pd.DataFrame({'sv': sv,
                                 'mesh': concatenated_mesh_bytes,
@@ -1463,11 +1466,11 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
     # Don't bother decimating really tiny meshes -- something usually goes wrong anyway.
     if decimation != 1.0 and len(mesh.vertices_zyx) > 10:
         original_vertices = mesh.vertices_zyx
-        mesh.trim()
-        mesh.simplify_open3d(decimation)
-        final_vertices = mesh.vertices_zyx
-        same_as_before = len([final_v for final_v in final_vertices if final_v in original_vertices ])
-        print(f"len mesh {len(original_vertices)} {decimation} {len(final_vertices)}  {same_as_before}")
+        #mesh.trim()
+        #mesh.simplify_open3d(decimation)
+        #final_vertices = mesh.vertices_zyx
+        #same_as_before = len([final_v for final_v in final_vertices if final_v in original_vertices ])
+        #print(f"len mesh {len(original_vertices)} {decimation} {len(final_vertices)}  {same_as_before}")
 
 
     if (rescale_factor != 1.0).any():
@@ -1495,11 +1498,11 @@ def serialize_custom_drc(sv, meshes, path=None):
         t1 = time.time()
         print(f"{t1-t0} serializing mesh trimmed ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
         if len(mesh.vertices_zyx)>0:
-            #original_vertices = mesh.vertices_zyx
-            #mesh.simplify_open3d(0.2)
-            #final_vertices = mesh.vertices_zyx
-            #same_as_before = len([final_v for final_v in final_vertices if final_v in original_vertices ])
-            #print(f"len mesh {len(original_vertices)} {len(final_vertices)}  {same_as_before}")
+            original_vertices = mesh.vertices_zyx
+            mesh.simplify_open3d(0.9)
+            final_vertices = mesh.vertices_zyx
+            same_as_before = len([final_v for final_v in final_vertices if final_v in original_vertices ])
+            print(f"len mesh {len(original_vertices)} {len(final_vertices)}  {same_as_before}")
 
             mesh.compress('custom_draco')
             t2 = time.time()
