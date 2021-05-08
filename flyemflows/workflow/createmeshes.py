@@ -350,7 +350,12 @@ class CreateMeshes(Workflow):
         if options['subset-batch-size'] > 0 and not (options['subset-supervoxels'] or options['subset-bodies']):
             raise RuntimeError("The batch feature is not supported unless you explicitly specify subset-supervoxels or subset-bodies.")
 
-    def _init_input_service(self):
+    def _init_input_service(self,close=False):
+        if close:
+            del(self.input_service)
+            self.resource_mgr_client.close()
+            del(self.resource_mgr_client)
+
         input_config = self.config["input"]
         resource_config = self.config["resource-manager"]
         self.resource_mgr_client = ResourceManagerClient(resource_config["server"], resource_config["port"])
@@ -513,11 +518,11 @@ class CreateMeshes(Workflow):
             rescale_levels.sort()
             self.config["input"]["adapters"]["rescale-level"]["lods"] = rescale_levels
 
-        for rescale_level in rescale_levels:
+        for idx,rescale_level in enumerate(rescale_levels):
             self.config["input"]["adapters"]["rescale-level"]["level"] = rescale_level
             self.config["createmeshes"]["pre-stitch-parameters"]["decimation"] = min(base_decimation*2**rescale_level,1.0)
             #self.config["createmeshes"]["halo"] = base_halo/2**rescale_level # ensures that each box spans same voxels across scales
-            self._init_input_service()
+            self._init_input_service(close = idx>0)
 
             subset_supervoxels, existing_svs = self._load_subset_supervoxels()
             batch_size = self.config["createmeshes"]["subset-batch-size"]
@@ -568,7 +573,9 @@ class CreateMeshes(Workflow):
         max_svs_per_brick = self.config["createmeshes"]["max-svs-per-brick"]
         bricks_ddf, num_unique_bricks, num_bricks = self._distribute_counts(batch_index, bricks_ddf, brick_counts_df, max_svs_per_brick)
         del brick_counts_df
-           
+        
+        npartitions = bricks_ddf.npartitions
+        print(f"npartitions brick {npartitions}")
         brick_meshes_ddf = self._compute_brickwise_meshes(batch_index, bricks_ddf, num_brick_meshes, num_bricks, num_unique_bricks)
         release_collection(bricks_ddf)
         del bricks_ddf
@@ -579,10 +586,14 @@ class CreateMeshes(Workflow):
         del brick_meshes_ddf
 
         # TODO: Repartition?
-
-        self._write_meshes(batch_index, sv_meshes_ddf, subset_supervoxels, existing_svs)
+        sv_meshes_ddf=sv_meshes_ddf.repartition(npartitions=npartitions)
+        sv_meshes_processed_ddf = self._process_meshes(batch_index, sv_meshes_ddf)
         release_collection(sv_meshes_ddf)
         del sv_meshes_ddf
+
+        self._write_meshes(batch_index, sv_meshes_processed_ddf, subset_supervoxels, existing_svs)
+        release_collection(sv_meshes_processed_ddf)
+        del sv_meshes_processed_ddf
 
 
     def init_bricks_ddf(self, volume_service, subset_labels):
@@ -1082,11 +1093,14 @@ class CreateMeshes(Workflow):
                 # Bricks are always size of n5 attributes dimensions, so we need to concatenate lower res meshes
                 # into larger bricks
                 concatenated_mesh_bytes = Mesh.concatenate_mesh_bytes(sv_brick_meshes_df['mesh'], sv_brick_meshes_df['vertex_count'],  current_lod, highest_res_lod)
-                return pd.DataFrame({'sv': sv,
-                                'mesh': concatenated_mesh_bytes,
+                idx = list(range(len(concatenated_mesh_bytes[0])))
+                # Assume less than 100 lods, 1E9 objects and 1E9 chunks 
+                lod_sv_idx = [str(current_lod).zfill(2)+"_"+str(sv).zfill(9)+"_"+str(current_idx).zfill(9) for current_idx in idx ]
+                return pd.DataFrame({'lod_sv_idx': lod_sv_idx,
+                                'mesh': concatenated_mesh_bytes[0],
                                 'vertex_count': 0,
                                 'compressed_size': 0},
-                                index=[sv])
+                                index=[lod_sv_idx])
 
             mesh = Mesh.concatenate_meshes(sv_brick_meshes_df['mesh'])
 
@@ -1121,7 +1135,7 @@ class CreateMeshes(Workflow):
             sv_brick_meshes_dgb = brick_meshes_ddf.groupby('sv')
             #del brick_meshes_ddf
 
-            dtypes = {'sv': np.uint64, 'mesh': object, 'vertex_count': np.int64, 'compressed_size': int}
+            dtypes = {'lod_sv_idx': str, 'mesh': object, 'vertex_count': np.int64, 'compressed_size': int}
             sv_meshes_ddf = sv_brick_meshes_dgb.apply(assemble_sv_meshes, meta=dtypes)
             del sv_brick_meshes_dgb
             sv_meshes_ddf = drop_empty_partitions(sv_meshes_ddf)
@@ -1130,11 +1144,70 @@ class CreateMeshes(Workflow):
             dir_name = mkdir(self.config,'stitched-mesh-stats')
 
             # to_csv() blocks, so this triggers the computation.
-            sv_meshes_ddf[['sv', 'vertex_count', 'compressed_size']].to_csv(f'{dir_name}/partition-*.csv', index=False, header=True)
+            sv_meshes_ddf[['lod_sv_idx', 'vertex_count', 'compressed_size']].to_csv(f'{dir_name}/partition-*.csv', index=False, header=True)
 
         return sv_meshes_ddf
     
-    def _write_meshes(self, batch_index, sv_meshes_ddf, subset_supervoxels, existing_svs):
+    def _process_meshes(self, batch_index, sv_meshes_ddf):
+       
+        def process_meshes(sv_meshes_df):
+            assert len(sv_meshes_df) > 0
+
+            try:
+                lod_sv_idx = sv_meshes_df['lod_sv_idx'].iloc[0]
+            except Exception as ex:
+                # Re-raise with the whole input
+                # (Can't use exception chaining, sadly.)
+                # NOTE:
+                #   If any of the code below raises an exception,
+                #   it can have strage consequences for subsequent calls to this function.
+                #   If you're seeing weird errors here, like KeyError: 'sv',
+                #   that's probably a sign that something BELOW is failing.
+                #   Step through the code below in a debugger.
+                np.save('failed-sv_meshes_df.npy', sv_meshes_df.to_records(index=True))
+                raise Exception('WrappedError:', type(ex), ex,
+                                sv_meshes_df.index,
+                                sv_meshes_df.columns.tolist(),
+                                str(sv_meshes_df.iloc[0]),
+                                'See failed-sv_meshes_df.npy')
+
+            assert (sv_meshes_df['lod_sv_idx'] == lod_sv_idx).all()
+            
+            mesh = sv_meshes_df['mesh'].iloc[0]
+            mesh.trim()
+            if len(mesh.vertices_zyx)>0:
+                lod,sv,idx = lod_sv_idx.split('_')
+                mesh.compress('custom_draco')
+                mesh.pickle_compression_method='custom_draco'
+                return pd.DataFrame({'lod_sv_idx': lod_sv_idx,
+                                'lod': int(lod),
+                                'sv': int(sv),
+                                'idx': int(idx),
+                                'mesh': mesh,
+                                'vertex_count': 0,
+                                'compressed_size': 0},
+                                index=[lod_sv_idx])
+
+        with Timer(f"Batch {batch_index:02}: Processing meshes", logger):
+            sv_meshes_dgb = sv_meshes_ddf.groupby('lod_sv_idx')
+            #del brick_meshes_ddf
+            dtypes = {'lod_sv_idx': str, 'lod': int, 'sv': int, 'idx': int, 'mesh': object, 'vertex_count': np.int64, 'compressed_size': int}
+            sv_meshes_processed_ddf = sv_meshes_dgb.apply(process_meshes, meta=dtypes)
+            del sv_meshes_dgb
+            sv_meshes_processed_ddf = drop_empty_partitions(sv_meshes_processed_ddf)
+            # Export stitched mesh statistics
+            dir_name = mkdir(self.config,'processed-mesh-stats')
+
+            # to_csv() blocks, so this triggers the computation.
+            sv_meshes_processed_ddf[['lod_sv_idx', 'vertex_count', 'compressed_size']].to_csv(f'{dir_name}/partition-*.csv', index=False, header=True)
+
+        #sv_meshes_processed_ddf.sort_values(['lod','sv','idx'], ascending=[True, True, True],inplace=True)
+        sv_meshes_processed_ddf = sv_meshes_processed_ddf.assign(ind=sv_meshes_processed_ddf.lod_sv_idx)
+        sv_meshes_processed_ddf = sv_meshes_processed_ddf.set_index('ind')
+        sv_meshes_processed_ddf = sv_meshes_processed_ddf.groupby('sv').agg(list).reset_index()
+        return sv_meshes_processed_ddf
+
+    def _write_meshes(self, batch_index, sv_meshes_processed_ddf, subset_supervoxels, existing_svs):
 
         def write_info_file(path):
             #default to 10 quantization bits
@@ -1163,7 +1236,7 @@ class CreateMeshes(Workflow):
             fragment_offsets = []
             for mesh in meshes:
                 fragment_positions.append( mesh.fragment_origin//mesh.fragment_shape )
-                fragment_offsets.append(len(mesh.draco_bytes))
+                fragment_offsets.append( len(mesh.draco_bytes) )
 
             fragment_positions = np.array(fragment_positions)
             fragment_offsets = np.array(fragment_offsets)
@@ -1198,7 +1271,7 @@ class CreateMeshes(Workflow):
         current_lod = self.config["input"]["adapters"]["rescale-level"]["level"]
         lods = self.config["input"]["adapters"]["rescale-level"]["lods"] if "lods" in self.config["input"]["adapters"]["rescale-level"] else []
 
-        def write_sv_meshes(sv_meshes_df, log=True):
+        def write_sv_meshes(sv_meshes_processed_df, log=True):
             (destination_type,) = destination.keys()
             assert destination_type in ('directory', 'keyvalue', 'tarsupervoxels')
 
@@ -1206,9 +1279,9 @@ class CreateMeshes(Workflow):
             if fmt=="custom_drc":
                 extension = ""
 
-            names = [f"{sv}{extension}" for sv in sv_meshes_df['sv']]
+            names = [f"{sv}{extension}" for sv in sv_meshes_processed_df['sv']]
             binary_meshes = [serialize_mesh(sv, mesh, None, fmt=fmt, log=log)
-                             for (sv, mesh) in sv_meshes_df[['sv', 'mesh']].itertuples(index=False)]
+                              for (sv, mesh) in sv_meshes_processed_df[['sv', 'mesh']].itertuples(index=False)]
             keyvalues = dict(zip(names, binary_meshes))
             filesizes = [len(mesh_bytes) for mesh_bytes in keyvalues.values()]
 
@@ -1223,7 +1296,7 @@ class CreateMeshes(Workflow):
                         f.write(mesh_bytes)
                     
                     if fmt=="custom_drc":
-                        write_index_file(path, sv_meshes_df['mesh'].iloc[idx], current_lod, lods)
+                        write_index_file(path, sv_meshes_processed_df['mesh'].iloc[idx], current_lod, lods)
                         write_info_file(destination['directory'] )
                     idx+=1
             else:
@@ -1234,14 +1307,13 @@ class CreateMeshes(Workflow):
                     elif 'keyvalue' in destination:
                         post_keyvalues(*instance, keyvalues)
 
-            result_df = sv_meshes_df[['sv', 'vertex_count', 'compressed_size']].copy()
+            result_df = sv_meshes_processed_df[['sv', 'vertex_count', 'compressed_size']].copy()
             result_df['file_size'] = filesizes
             return result_df
-
+            
         with Timer(f"Batch {batch_index:02}: Writing meshes", logger):
-            dtypes = {'sv': np.uint64, 'vertex_count': np.int64, 'compressed_size': int, 'file_size': int}
-            written_stats_df = sv_meshes_ddf.map_partitions(write_sv_meshes, meta=dtypes).clear_divisions().compute()
-
+            dtypes = {'sv': str, 'vertex_count': np.int64, 'compressed_size': int, 'file_size': int}
+            written_stats_df = sv_meshes_processed_ddf.map_partitions(write_sv_meshes, meta=dtypes).clear_divisions().compute()
         missing_svs = None
         if include_empty and len(subset_supervoxels):
             # This assertion guarantees that we won't overwrite any existing files with empty files
@@ -1249,19 +1321,19 @@ class CreateMeshes(Workflow):
 
             # Write empty files for any supervoxels in the user's subset
             # that we didn't even see in the data (e.g. because they don't exist at the scale we used).
-            missing_svs = set(subset_supervoxels) - set(written_stats_df['sv']) - existing_svs
+            missing_svs = set(subset_supervoxels) - set(written_stats_df['lod_sv_idx']) - existing_svs
 
         if not missing_svs:
             final_stats_df = written_stats_df
         else:
             logger.warning(f"Batch {batch_index:02}: Writing empty files for {len(missing_svs)} labels from your subset which could not be found in the segmentation")
-            missing_sv_meshes_df = pd.DataFrame({'sv': list(missing_svs)}, dtype=np.uint64)
-            missing_sv_meshes_df['mesh'] = Mesh(np.zeros((0,3)), np.zeros((0,3))) # Empty mesh
-            missing_sv_meshes_df['vertex_count'] = np.int64(0)
-            missing_sv_meshes_df['compressed_size'] = 0
-            missing_sv_meshes_df['file_size'] = 0
-            missing_sv_meshes_df = write_sv_meshes(missing_sv_meshes_df, log=False)
-            final_stats_df = pd.concat((written_stats_df, missing_sv_meshes_df))
+            missing_sv_meshes_processed_df = pd.DataFrame({'lod_sv_idx': list(missing_svs)}, dtype=np.uint64)
+            missing_sv_meshes_processed_df['mesh'] = Mesh(np.zeros((0,3)), np.zeros((0,3))) # Empty mesh
+            missing_sv_meshes_processed_df['vertex_count'] = np.int64(0)
+            missing_sv_meshes_processed_df['compressed_size'] = 0
+            missing_sv_meshes_processed_df['file_size'] = 0
+            missing_sv_meshes_processed_df = write_sv_meshes(missing_sv_meshes_processed_df, log=False)
+            final_stats_df = pd.concat((written_stats_df, missing_sv_meshes_processed_df))
 
         np.save('final-mesh-stats.npy', final_stats_df.to_records(index=False))
 
@@ -1451,6 +1523,10 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
     mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, rescale_level = rescale_level, smoothing_rounds=smoothing)
     # if smoothing != 0:
     #     mesh.laplacian_smooth(smoothing)
+    #mesh.trim()
+    #mesh.trim()
+    #if len(mesh.vertices_zyx):
+    #    print(f"trimming internal {np.amax(mesh.vertices_zyx)} {fragment_shape} {fragment_origin}")
 
     if max_vertices != 0 and len(mesh.vertices_zyx) > max_vertices:
         decimation = min( decimation, max_vertices / len(mesh.vertices_zyx) )
@@ -1472,37 +1548,12 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
 
 def serialize_custom_drc(sv, meshes, path=None):
     
-    len_meshes = len(meshes)
-    print(f"serializing mesh {sv} {len_meshes}")
     serialized_bytes=bytearray()
-    mesh_bytes = []
-    for idx,mesh in enumerate(meshes):
-        t0 = time.time()
-        print(f"serializing mesh start ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
-        mesh.trim()
-        t1 = time.time()
-        print(f"{t1-t0} serializing mesh trimmed ({len(mesh.vertices_zyx)}),{sv},{idx},{idx/len_meshes}")
-        if len(mesh.vertices_zyx)>0:
-            mesh.compress('custom_draco')
-            t2 = time.time()
-            print(f"{t2-t1} serializing mesh compressed {sv},{idx},{idx/len_meshes}")
-            mesh_bytes.append( len(mesh.draco_bytes) )
-            t3 = time.time()
-            print(f"{t3-t2} serializing mesh appended {sv},{idx},{idx/len_meshes}")
-            serialized_bytes.extend(mesh.draco_bytes)
-            t4 = time.time()
-            print(f"{t4-t3} serializing mesh extended {sv},{idx},{idx/len_meshes}")
+    for mesh in meshes:
+        #print(f"mesh data: {mesh} {mesh.draco_bytes} {len(mesh.vertices_zyx)}")
+        serialized_bytes.extend(mesh.draco_bytes)
         del(mesh)
-    
-    #serialized_bytes = bytearray(sum(mesh_bytes))
-    #start_byte=0
-    #end_byte=0
-    #for idx,mesh in enumerate(meshes):
-    #    end_byte += mesh_bytes[idx] 
-    #    serialized_bytes[start_byte:end_byte-1] =  mesh.draco_bytes
-    #    start_byte = end_byte
 
-    print(f"serialized mesh {sv}")
     return serialized_bytes
 
 def serialize_mesh(sv, mesh, path=None, fmt=None, log=True):
@@ -1510,6 +1561,7 @@ def serialize_mesh(sv, mesh, path=None, fmt=None, log=True):
     Call mesh.serialize(), but if an error occurs,
     log it and save an .obj to 'bad-meshes'
     """
+
     if log:
         logging.getLogger(__name__).info(f"Serializing mesh for {sv}")
 
