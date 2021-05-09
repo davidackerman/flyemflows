@@ -575,7 +575,6 @@ class CreateMeshes(Workflow):
         del brick_counts_df
         
         npartitions = bricks_ddf.npartitions
-        print(f"npartitions brick {npartitions}")
         brick_meshes_ddf = self._compute_brickwise_meshes(batch_index, bricks_ddf, num_brick_meshes, num_bricks, num_unique_bricks)
         release_collection(bricks_ddf)
         del bricks_ddf
