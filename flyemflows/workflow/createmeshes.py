@@ -631,7 +631,7 @@ class CreateMeshes(Workflow):
 
         # Convert to dask.DataFrame, including logical scan-order position as the DataFrame index.
         with Timer("Loading bricks into dask DataFrame", logger):
-            bricks_ddf = brickwall.as_ddf(bricks_are_sorted=True)[['brick_index', 'lz0', 'ly0', 'lx0', 'brick']]
+            bricks_ddf = brickwall.as_ddf(bricks_are_sorted=True)[['brick_index', 'brick']]
         return bricks_ddf, subset_labels
 
 
@@ -806,7 +806,7 @@ class CreateMeshes(Workflow):
                 logger.info(f"Batch {batch_index:02}:  *** Also exporting labelcounts (slow) ***")
 
             dtypes = {'label': np.uint64, 'count': np.int64,
-                      'brick_index': np.int32, 'lz0': np.int32, 'ly0': np.int32, 'lx0': np.int32}
+                      'brick_index': np.int32}
 
             # subset_supervoxels could be large, so it's more efficient to pass
             # it via dask.delayed rather than a normally captured variable.
@@ -1004,8 +1004,8 @@ class CreateMeshes(Workflow):
                 fragment_origin = []
                 fragment_shape = []
                 for i in range(len(row.sv)):
-                    fragment_origin.append(np.array([row.lx0, row.ly0, row.lz0]))
-                    fragment_shape.append(brick_shape)
+                    fragment_origin.append(row.brick.logical_box[0][::-1]*2**rescale_level)
+                    fragment_shape.append(brick_shape*2**rescale_level)
 
                 stats_df = pd.DataFrame({'sv': row.sv, 'sv_size': row.sv_size, 
                                          'fragment_shape':fragment_shape, 'fragment_origin':fragment_origin,
@@ -1018,12 +1018,9 @@ class CreateMeshes(Workflow):
                 stats_df = stats_df.astype(dtypes)
 
                 brick_meshes_df = compute_meshes_for_brick(row.brick, stats_df, options, rescale_level)
-                brick_meshes_df['lz0'] = row.lz0
-                brick_meshes_df['ly0'] = row.ly0
-                brick_meshes_df['lx0'] = row.lx0
 
                 # Reorder columns
-                cols = ['lz0', 'ly0', 'lx0', 'sv', 'body', 'mesh', 'vertex_count', 'compressed_size']
+                cols = ['sv', 'body', 'mesh', 'vertex_count', 'compressed_size']
                 brick_meshes_df = brick_meshes_df[cols]
 
                 result_dfs.append(brick_meshes_df)
@@ -1032,8 +1029,7 @@ class CreateMeshes(Workflow):
             assert result_df.columns.tolist() == cols
             return result_df
 
-        dtypes = {'lz0': np.int32, 'ly0': np.int32, 'lx0': np.int32,
-                  'sv': np.uint64, 'body': np.uint64,
+        dtypes = {'sv': np.uint64, 'body': np.uint64,
                   'mesh': object,
                   'vertex_count': int, 'compressed_size': int}
 
@@ -1173,9 +1169,10 @@ class CreateMeshes(Workflow):
             assert (sv_meshes_df['lod_sv_idx'] == lod_sv_idx).all()
             
             mesh = sv_meshes_df['mesh'].iloc[0]
-            mesh.trim()
-            if len(mesh.vertices_zyx)>0:
-                lod,sv,idx = lod_sv_idx.split('_')
+            lod,sv,idx = lod_sv_idx.split('_')
+            #mesh.trim(do_trim_subchunks=int(lod)>0)
+            vertex_count = len(mesh.vertices_zyx)
+            if vertex_count>0:
                 mesh.compress('custom_draco')
                 mesh.pickle_compression_method='custom_draco'
                 return pd.DataFrame({'lod_sv_idx': lod_sv_idx,
@@ -1183,8 +1180,8 @@ class CreateMeshes(Workflow):
                                 'sv': int(sv),
                                 'idx': int(idx),
                                 'mesh': mesh,
-                                'vertex_count': 0,
-                                'compressed_size': 0},
+                                'vertex_count': vertex_count,
+                                'compressed_size': len(mesh.draco_bytes)},
                                 index=[lod_sv_idx])
 
         with Timer(f"Batch {batch_index:02}: Processing meshes", logger):
@@ -1366,6 +1363,7 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, outpu
         brick's logical_box.
     """
     if export_labelcounts and len(brick_df) > 0:
+        #need to fix this since removed lz0, ly0, lx0
         debug_file_name = 'z{:05d}-y{:05d}-x{:05d}'.format(*brick_df[['lz0', 'ly0', 'lx0']].iloc[0].values.tolist())
         debug_file_name += '-{:04d}'.format(np.random.randint(10000))
         np.save(f'{output_dirs["brick_ddf_partitions"]}/{debug_file_name}.npy', brick_df[['lz0', 'ly0', 'lx0']].to_records(index=True))
@@ -1395,9 +1393,6 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, outpu
 
         brick_counts_df = label_counts.reset_index()
         brick_counts_df['brick_index'] = row.Index
-        brick_counts_df['lz0'] = brick.logical_box[0,0]
-        brick_counts_df['ly0'] = brick.logical_box[0,1]
-        brick_counts_df['lx0'] = brick.logical_box[0,2]
 
         brick_counts_dfs.append(brick_counts_df)
 
@@ -1414,9 +1409,6 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, outpu
         s.name = 'count'
         s.index.name = 'label'
         df = s.reset_index()
-        df['lz0'] = np.zeros((0,), np.int32)
-        df['ly0'] = np.zeros((0,), np.int32)
-        df['lx0'] = np.zeros((0,), np.int32)
         return df
 
 
@@ -1520,12 +1512,15 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
     # by default, it supports smoothing natively.
     # It's ~2x faster to do it there instead of via a separate step.
     mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, rescale_level = rescale_level, smoothing_rounds=smoothing)
+    mesh.vertices_zyx *= 2**rescale_level
+    mesh.trim(rescale_level)
+
     # if smoothing != 0:
     #     mesh.laplacian_smooth(smoothing)
     #mesh.trim()
     #mesh.trim()
     #if len(mesh.vertices_zyx):
-    #    print(f"trimming internal {np.amax(mesh.vertices_zyx)} {fragment_shape} {fragment_origin}")
+    #    print(f"trimming internal {temp} {temp_after} {np.amin(mesh.vertices_zyx,axis=1)} {np.amax(mesh.vertices_zyx,axis=1)} {fragment_shape} {fragment_origin}")
 
     if max_vertices != 0 and len(mesh.vertices_zyx) > max_vertices:
         decimation = min( decimation, max_vertices / len(mesh.vertices_zyx) )
