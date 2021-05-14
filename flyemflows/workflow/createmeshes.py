@@ -1170,8 +1170,12 @@ class CreateMeshes(Workflow):
             
             mesh = sv_meshes_df['mesh'].iloc[0]
             lod,sv,idx = lod_sv_idx.split('_')
-            #mesh.trim(do_trim_subchunks=int(lod)>0)
+            if int(lod)>0:
+                mesh.stitch_adjacent_faces(drop_unused_vertices=True, drop_duplicate_faces=True)
+            mesh.trim(do_trim_subchunks=int(lod)>0)
             vertex_count = len(mesh.vertices_zyx)
+            mesh.fragment_shape = mesh.fragment_shape.astype('int')
+            mesh.fragment_origin = mesh.fragment_origin.astype('int')
             if vertex_count>0:
                 mesh.compress('custom_draco')
                 mesh.pickle_compression_method='custom_draco'
@@ -1513,7 +1517,7 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
     # It's ~2x faster to do it there instead of via a separate step.
     mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, rescale_level = rescale_level, smoothing_rounds=smoothing)
     mesh.vertices_zyx *= 2**rescale_level
-    mesh.trim(rescale_level)
+    #mesh.trim(rescale_level)
 
     # if smoothing != 0:
     #     mesh.laplacian_smooth(smoothing)
