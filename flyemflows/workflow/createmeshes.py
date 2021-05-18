@@ -35,6 +35,8 @@ import struct
 import json
 import time
 
+from functools import cmp_to_key
+
 logger = logging.getLogger(__name__)
 
 class CreateMeshes(Workflow):
@@ -1172,6 +1174,8 @@ class CreateMeshes(Workflow):
             lod,sv,idx = lod_sv_idx.split('_')
             if int(lod)>0:
                 mesh.stitch_adjacent_faces(drop_unused_vertices=True, drop_duplicate_faces=True)
+            if len(mesh.vertices_zyx)>0:
+                mesh.simplify_openmesh(0.1)
             mesh.trim(do_trim_subchunks=int(lod)>0)
             vertex_count = len(mesh.vertices_zyx)
             mesh.fragment_shape = mesh.fragment_shape.astype('int')
@@ -1208,6 +1212,93 @@ class CreateMeshes(Workflow):
         return sv_meshes_processed_ddf
 
     def _write_meshes(self, batch_index, sv_meshes_processed_ddf, subset_supervoxels, existing_svs):
+        def rewrite_index_with_empty_fragments(path):
+            def unpack_and_remove(datatype,num_elements,file_content):
+                datatype = datatype*num_elements
+                output = struct.unpack(datatype, file_content[0:4*num_elements])
+                file_content = file_content[4*num_elements:] 
+                return np.array(output),file_content
+
+            def get_fragment_positions_in_current_lod(fragment_positions_in_higher_lod):
+                #get 8 subfragments
+                fragment_positions_in_current_lod = []
+                for fragment_position_in_higher_lod in fragment_positions_in_higher_lod:
+                    temp=[]
+                    for x in range(2):
+                        for y in range(2):
+                            for z in range(2):
+                                adjust = [x,y,z]
+                                fragment_positions_in_current_lod.append([fragment_position_in_higher_lod[i]*2+adjust[i] for i in range(3)])
+                return fragment_positions_in_current_lod
+                    
+
+            with open(f"{path}.index", mode='rb') as file:
+                file_content = file.read()
+            
+            chunk_shape,file_content = unpack_and_remove("f",3,file_content)
+            grid_origin,file_content = unpack_and_remove("f",3,file_content)
+            num_lods,file_content = unpack_and_remove("I",1,file_content)
+            num_lods = num_lods[0]
+            lod_scales,file_content = unpack_and_remove("f",num_lods,file_content)
+            vertex_offsets,file_content = unpack_and_remove("I",num_lods*3,file_content)
+            num_fragments_per_lod,file_content = unpack_and_remove("I",num_lods,file_content)
+            original_fragment_positions = []
+            all_fragment_positions = []
+            all_fragment_offsets = []
+
+            for lod in range(num_lods):
+                fragment_positions,file_content = unpack_and_remove("I",num_fragments_per_lod[lod]*3,file_content)
+                fragment_positions = fragment_positions.reshape((3,-1)).T
+                fragment_offsets,file_content = unpack_and_remove("I",num_fragments_per_lod[lod],file_content)
+                original_fragment_positions.append(fragment_positions.tolist())
+                all_fragment_positions.append(fragment_positions.tolist())
+                all_fragment_offsets.append(fragment_offsets.tolist())
+
+            for lod in range(num_lods):
+                for fragment_position in original_fragment_positions[lod]:
+                    #ensure that this fragment position is covered in all higher lods
+                    for higher_lod in range(lod+1,num_lods):
+                        fragment_position_in_current_lod = [fragment_position[i]//(2**higher_lod) for i in range(3)]
+                        if fragment_position_in_current_lod not in all_fragment_positions[higher_lod]:
+                            all_fragment_positions[higher_lod].append(fragment_position_in_current_lod)
+                            all_fragment_offsets[higher_lod].append(0)
+            
+            for lod in range(num_lods):
+                for fragment_position in all_fragment_positions[lod]:
+                    #ensure this fragment position is covered in all lower lods
+                    fragment_positions_in_higher_lod = [fragment_position]
+                    for lower_lod in range(lod-1,-1,-1):
+                        fragment_positions_in_current_lod = get_fragment_positions_in_current_lod(fragment_positions_in_higher_lod)
+                        for fragment_position_in_current_lod in fragment_positions_in_current_lod:
+                            if fragment_position_in_current_lod not in all_fragment_positions[lower_lod]:
+                                all_fragment_positions[lower_lod].append(fragment_position_in_current_lod)
+                                all_fragment_offsets[lower_lod].append(0)
+                        fragment_positions_in_higher_lod = fragment_positions_in_current_lod
+            
+            num_fragments_per_lod = []
+            for lod in range(num_lods):
+                all_fragment_offsets[lod], all_fragment_positions[lod] = zip(*sorted(zip(all_fragment_offsets[lod], all_fragment_positions[lod]), key=cmp_to_key(lambda x, y: _cmp_zorder(x[1], y[1]))))
+                num_fragments_per_lod.append(len(all_fragment_offsets[lod]))
+
+            num_fragments_per_lod = np.array(num_fragments_per_lod)
+            with open(f"{path}.index_with_empty_fragments", 'ab') as f:
+                f.write(chunk_shape.astype('<f').tobytes())
+                f.write(grid_origin.astype('<f').tobytes())
+
+                f.write(struct.pack('<I', num_lods))
+                f.write(lod_scales.astype('<f').tobytes())
+                f.write(vertex_offsets.astype('<f').tobytes(order='C'))
+
+                f.write(num_fragments_per_lod.astype('<I').tobytes())
+
+                for lod in range(num_lods):
+                    fragment_positions = np.array(all_fragment_positions[lod]).reshape(-1,3)
+                    fragment_offsets = np.array(all_fragment_offsets[lod]).reshape(-1)
+
+                    f.write(fragment_positions.T.astype('<I').tobytes(order='C'))
+                    f.write(fragment_offsets.astype('<I').tobytes(order='C'))
+            
+            os.system(f"mv {path}.index_with_empty_fragments {path}.index")
 
         def write_info_file(path):
             #default to 10 quantization bits
@@ -1261,6 +1352,10 @@ class CreateMeshes(Workflow):
 
             os.system(f"cat {path}.index_1 {path}.index_2 {path}.index_3 {path}.index_4 > {path}.index") #cat every time in case this is the last lod that contains this sv's mesh
 
+            if current_lod > lods[0]:
+                rewrite_index_with_empty_fragments(path)
+
+        
         options = self.config["createmeshes"]
         fmt = options["format"]
         include_empty = options["include-empty"]
@@ -1388,8 +1483,11 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, outpu
 
             mapper = LabelMapper(subset_labels, subset_labels)
             inner_vol = mapper.apply_with_default(inner_vol, 0)
-
-        label_counts = pd.Series(inner_vol.reshape(-1)).value_counts().sort_index()
+        
+        inner_vol, inner_counts = np.unique(inner_vol, return_counts=True) #use same name to save memory?
+        label_counts = pd.Series(inner_counts,index=inner_vol)
+        del inner_vol
+        del inner_box
         label_counts.index.name = 'label'
         label_counts.name = 'count'
         if label_counts.index[0] == 0:
@@ -1592,3 +1690,19 @@ def mkdir(config, name, exist_ok=False):
         name+="-lod-"+str(config["input"]["adapters"]["rescale-level"]["level"])
     os.makedirs(name, exist_ok=exist_ok)
     return name
+
+def _cmp_zorder(lhs, rhs) -> bool:
+    def less_msb(x: int, y: int) -> bool:
+        return x < y and x < (x ^ y)
+
+    # Assume lhs and rhs array-like objects of indices.
+    assert len(lhs) == len(rhs)
+    # Will contain the most significant dimension.
+    msd = 2
+    # Loop over the other dimensions.
+    for dim in [1, 0]:
+        # Check if the current dimension is more significant
+        # by comparing the most significant bits.
+        if less_msb(lhs[msd] ^ rhs[msd], lhs[dim] ^ rhs[dim]):
+            msd = dim
+    return lhs[msd] - rhs[msd]
