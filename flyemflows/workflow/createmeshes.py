@@ -1242,35 +1242,27 @@ class CreateMeshes(Workflow):
             num_fragments_per_lod = np.array([len(meshes) ])
             fragment_positions = []
             fragment_offsets = []
+            mesh_boxes = []
             for mesh in meshes:
                 fragment_positions.append( mesh.fullscale_fragment_origin//mesh.fullscale_fragment_shape )
                 fragment_offsets.append( len(mesh.draco_bytes) )
-
+                mesh_boxes.append(mesh.box[:,::-1])
+            
             fragment_positions = np.array(fragment_positions)
             fragment_offsets = np.array(fragment_offsets)
 
-            #print(f"{path} lod({current_lod}) {num_fragments_per_lod} {chunk_shape} {grid_origin} {vertex_offsets} {fragment_positions.T.astype('<I')} {fragment_offsets.astype('<I')}")
             if current_lod == lods[0]: #then is highest res lod
-                with open(f"{path}.index_1", 'wb') as f:
+                with open(f"{path}.index", 'wb') as f:
                     f.write(chunk_shape.astype('<f').tobytes())
                     f.write(grid_origin.astype('<f').tobytes())
-
-            with open(f"{path}.index_2", 'wb') as f:
-                f.write(struct.pack('<I', num_lods))
-                f.write(lod_scales.astype('<f').tobytes())
-                f.write(vertex_offsets.astype('<f').tobytes(order='C'))
-
-            with open(f"{path}.index_3", 'ab') as f:
-                f.write(num_fragments_per_lod.astype('<I').tobytes())
-            
-            with  open(f"{path}.index_4", 'ab') as f:
-                f.write(fragment_positions.T.astype('<I').tobytes(order='C'))
-                f.write(fragment_offsets.astype('<I').tobytes(order='C'))
-
-            os.system(f"cat {path}.index_1 {path}.index_2 {path}.index_3 {path}.index_4 > {path}.index") #cat every time in case this is the last lod that contains this sv's mesh
-
-            if current_lod > lods[0]:
-                rewrite_index_with_empty_fragments(path)
+                    f.write(struct.pack('<I', num_lods))
+                    f.write(lod_scales.astype('<f').tobytes())
+                    f.write(vertex_offsets.astype('<f').tobytes(order='C'))
+                    f.write(num_fragments_per_lod.astype('<I').tobytes())
+                    f.write(fragment_positions.T.astype('<I').tobytes(order='C'))
+                    f.write(fragment_offsets.astype('<I').tobytes(order='C'))
+            else:
+                rewrite_index_with_empty_fragments(path,mesh_boxes,fragment_positions,fragment_offsets)
 
         
         options = self.config["createmeshes"]
