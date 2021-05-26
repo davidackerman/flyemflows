@@ -562,9 +562,6 @@ class CreateMeshes(Workflow):
                         with switch_cwd(f'batch-{batch_index:02d}', create=True):
                             self.execute_batch(batch_index, bricks_ddf, batch_subset_svs, batch_existing_svs)
         
-        #remove now unnecessary index files:
-        os.system(f'rm {self.config["output"]["directory"]}/*.index_*') 
-
     def execute_batch(self, batch_index, bricks_ddf, subset_supervoxels, existing_svs):
         brick_counts_df = self._compute_brick_labelcounts(batch_index, bricks_ddf, subset_supervoxels)
         brick_counts_df = self._compute_body_stats(batch_index, brick_counts_df)
@@ -995,6 +992,8 @@ class CreateMeshes(Workflow):
     def _compute_brickwise_meshes(self, batch_index, bricks_ddf, num_brick_meshes, num_bricks, num_unique_bricks):
         options = self.config["createmeshes"]
         rescale_level = self.config["input"]["adapters"]["rescale-level"]["level"]
+        lods = self.config["input"]["adapters"]["rescale-level"]["lods"]
+        rescale_method = self.config["input"]["adapters"]["rescale-level"]["method"]
         def compute_meshes_for_bricks(bricks_partition_df):
             assert len(bricks_partition_df) > 0, "partition is empty" # drop_empty_partitions() should have eliminated these.
             result_dfs = []
@@ -1018,7 +1017,7 @@ class CreateMeshes(Workflow):
                     
                 stats_df = stats_df.astype(dtypes)
 
-                brick_meshes_df = compute_meshes_for_brick(row.brick, stats_df, options, rescale_level)
+                brick_meshes_df = compute_meshes_for_brick(row.brick, stats_df, options, rescale_level, rescale_method)
 
                 # Reorder columns
                 cols = ['sv', 'body', 'mesh', 'vertex_count', 'compressed_size']
@@ -1172,15 +1171,17 @@ class CreateMeshes(Workflow):
             mesh = sv_meshes_df['mesh'].iloc[0]
             lod,sv,idx = lod_sv_idx.split('_')
             
-            if int(lod)>0:
+            if int(lod)>lods[0]:
                 mesh.stitch_adjacent_faces(drop_unused_vertices=True, drop_duplicate_faces=True)
-
+            
+            if decimation<1:
+                mesh.simplify_pySimplify(decimation)
             #mesh.trim(do_trim_subchunks=False)
             #if len(mesh.vertices_zyx)>0:
             #    mesh.simplify_by_facet(position_quantization_bits = 10)
-            #if int(lod)>0:
+            if int(lod)>0:
+                mesh.trim(do_trim_subchunks=int(lod)>lods[0]) #do_trim_subchunks=True)
             
-            mesh.trim(do_trim_subchunks=int(lod)>0) #do_trim_subchunks=True)
 
             vertex_count = len(mesh.vertices_zyx)
             mesh.fragment_shape = mesh.fragment_shape.astype('int')
@@ -1198,6 +1199,8 @@ class CreateMeshes(Workflow):
                                 index=[lod_sv_idx])
 
         with Timer(f"Batch {batch_index:02}: Processing meshes", logger):
+            decimation = self.config["createmeshes"]["pre-stitch-parameters"]["decimation"]
+            lods = self.config["input"]["adapters"]["rescale-level"]["lods"]
             sv_meshes_dgb = sv_meshes_ddf.groupby('lod_sv_idx')
             #del brick_meshes_ddf
             dtypes = {'lod_sv_idx': str, 'lod': int, 'sv': int, 'idx': int, 'mesh': object, 'vertex_count': np.int64, 'compressed_size': int}
@@ -1236,8 +1239,8 @@ class CreateMeshes(Workflow):
             template = meshes[0]
             chunk_shape = template.fullscale_fragment_shape
             grid_origin = np.zeros(3)
-            lod_scales = np.array([2**lod for lod in lods])
-            num_lods = len(lod_scales)
+            num_lods = len(lods)
+            lod_scales = np.array([2**i for i in range(num_lods)])
             vertex_offsets = np.array([[0.,0.,0.] for _ in range(num_lods)])
             num_fragments_per_lod = np.array([len(meshes) ])
             fragment_positions = []
@@ -1423,7 +1426,7 @@ def compute_brick_labelcounts(brick_df, subset_labels, export_labelcounts, outpu
         return df
 
 
-def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
+def compute_meshes_for_brick(brick, stats_df, options, rescale_level, rescale_method):
     logging.getLogger(__name__).info(f"Computing meshes for brick: {brick} ({len(stats_df)} meshes)")
 
     smoothing = options["pre-stitch-parameters"]["smoothing"]
@@ -1474,7 +1477,7 @@ def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
             mask = (volume == row.sv)
             mask, mask_box = crop(mask, brick.physical_box)
 
-            args = (row.sv, row.body, mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim, False)
+            args = (row.sv, row.body, mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, rescale_method, do_trim, False)
             mesh_results.append( generate_mesh(*args) )
     else:
         # Parallelize using dask's ability to launch tasks-within-tasks
@@ -1492,7 +1495,7 @@ def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
                 # mostly to save RAM if there are lots of tasks that end up on one node.
                 compressed_mask = lz4.frame.compress(np.asarray(mask, order='C'))
  
-                args = (row.sv, row.body, compressed_mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim, True)
+                args = (row.sv, row.body, compressed_mask, mask_box, row.fragment_shape, row.fragment_origin, smoothing, decimation, max_vertices, rescale_factor, rescale_level, rescale_method, do_trim, True)
 
                 # Apparently the delayed() approach doesn't work
                 # (I get errors "Workers don't have promised key")
@@ -1514,7 +1517,7 @@ def compute_meshes_for_brick(brick, stats_df, options, rescale_level):
     return pd.DataFrame(mesh_results, columns=cols).astype(dtypes)
 
 
-def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, rescale_level, do_trim=False, compressed=False):
+def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoothing, decimation, max_vertices, rescale_factor, rescale_level, rescale_method, do_trim=False, compressed=False):
     if compressed:
         mask_shape = box_shape(mask_box)
         mask = np.frombuffer(lz4.frame.decompress(mask), np.bool).reshape(mask_shape)
@@ -1522,8 +1525,9 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
     # Since vol2mesh.Mesh.from_binary_vol() uses the 'ilastik' method
     # by default, it supports smoothing natively.
     # It's ~2x faster to do it there instead of via a separate step.
-    mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, rescale_level = rescale_level, smoothing_rounds=smoothing)
+    mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, lod = rescale_level, rescale_method = rescale_method, smoothing_rounds=smoothing)
     mesh.vertices_zyx *= 2**rescale_level
+    #print(fragment_origin,fragment_origin+fragment_shape,np.min(mesh.vertices_zyx[:,::-1],axis=0),np.max(mesh.vertices_zyx[:,::-1],axis=0))
     #mesh.trim(rescale_level)
 
     # if smoothing != 0:

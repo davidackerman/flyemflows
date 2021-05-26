@@ -69,16 +69,15 @@ def rewrite_index_with_empty_fragments(path, mesh_boxes, current_lod_fragment_po
         else:
             # update lower lods based on current lod
             for mesh_box in mesh_boxes:
-                chunking_start =  mesh_box[0]//current_chunk_shape
-                chunking_end =  (mesh_box[1]//current_chunk_shape)+1
+                #normally we would just do the following with -0 and +1, but because of quantization that occurs(?), this makes things extra conservative so we don't miss things
+                chunking_start =  np.maximum((mesh_box[0]*1.0)//current_chunk_shape-1, [0,0,0]).astype(np.uint32) #ensures that it is positive, otherwise wound up with -1 to uint, causing errors
+                chunking_end =  (mesh_box[1]//current_chunk_shape)+2
                 x_range = range(chunking_start[0], chunking_end[0])
                 y_range = range(chunking_start[1], chunking_end[1])
                 z_range = range(chunking_start[2], chunking_end[2])
                 all_required_fragment_positions_np = np.array([ [ [ [chunk_start_x, chunk_start_y, chunk_start_z] for chunk_start_x in x_range] for chunk_start_y in y_range] for chunk_start_z in z_range]).reshape(-1,3).astype(int)
                 all_required_fragment_positions.update( set(map(tuple,all_required_fragment_positions_np)) )
         current_missing_fragment_positions = all_required_fragment_positions - set(map(tuple,all_current_fragment_positions[lod])) 
-        print(lod,len(current_missing_fragment_positions))
-
         all_missing_fragment_positions.append(current_missing_fragment_positions)
 
     num_fragments_per_lod = []
