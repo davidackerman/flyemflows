@@ -34,7 +34,7 @@ from . import Workflow
 
 import struct
 import json
-import time
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -1180,6 +1180,10 @@ class CreateMeshes(Workflow):
             #if len(mesh.vertices_zyx)>0:
             #    mesh.simplify_by_facet(position_quantization_bits = 10)
             if int(lod)>0:
+                # TODO: trimming of subsampling can get messed up because halos are required to ensure near-boundary voxels are meshed,
+                # but that means that the mesh can extend into a neighboring chunk, which we then must trim. Likewise happens for labels-numba.
+                # basically in all cases where the mesh may continue into an adjacent chunk, it may be missed. Might be some ways to fix this,
+                # otherwise, need to first write out desired meshes, then parallelize them.
                 mesh.trim(do_trim_subchunks=int(lod)>lods[0]) #do_trim_subchunks=True)
             
 
@@ -1227,10 +1231,34 @@ class CreateMeshes(Workflow):
                     '@type': 'neuroglancer_multilod_draco',
                     'vertex_quantization_bits': 10,
                     'transform': [1,0,0,0,0,1,0,0,0,0,1,0],
-                    'lod_scale_multiplier': 1
+                    'lod_scale_multiplier': 1,
+                    'segment_properties': "segment_properties"
+
                 }
 
                 json.dump(info, f)
+
+        def write_segment_properties_file(path):
+            segment_properties_directory = f"{path}/segment_properties"
+            if not os.path.exists(segment_properties_directory):
+                os.makedirs(segment_properties_directory)
+
+            with open(f"{segment_properties_directory}/info", 'w') as f:
+                ids = [ index_file.split("/")[-1].split(".")[0] for index_file in glob.glob(f'{path}/*.index') ]
+                ids.sort(key = int)        
+                info = {
+                        "@type": "neuroglancer_segment_properties",
+                        "inline": { 
+                            "ids": ids,
+                            "properties": [{
+                                "id": "label",
+                                "type": "label",
+                                "values": [""]*len(ids)
+                            }]
+                        }
+                    }            
+                json.dump(info, f)
+
 
         def write_index_file(path, meshes, current_lod, lods):
             lods = [lod for lod in lods if lod <=current_lod] # since we don't know if the lowest res ones will have meshes for all svs
@@ -1296,6 +1324,7 @@ class CreateMeshes(Workflow):
                 keyvalues = {k:v for (k,v) in keyvalues.items() if len(v) > 0}
 
             if destination_type == 'directory':
+                write_info_file(destination['directory'] )
                 idx=0
                 for name, mesh_bytes in keyvalues.items():
                     path = destination['directory'] + "/" + name
@@ -1304,8 +1333,8 @@ class CreateMeshes(Workflow):
                     
                     if fmt=="custom_drc":
                         write_index_file(path, sv_meshes_processed_df['mesh'].iloc[idx], current_lod, lods)
-                        write_info_file(destination['directory'] )
                     idx+=1
+                write_segment_properties_file(destination['directory'])
             else:
                 instance = [destination[destination_type][k] for k in ('server', 'uuid', 'instance')]
                 with resource_mgr.access_context(instance[0], False, 1, sum(filesizes)):
@@ -1525,8 +1554,12 @@ def generate_mesh(sv, body, mask, mask_box, fragment_shape, fragment_origin,smoo
     # Since vol2mesh.Mesh.from_binary_vol() uses the 'ilastik' method
     # by default, it supports smoothing natively.
     # It's ~2x faster to do it there instead of via a separate step.
+
+    #TODO: if doing subsampling, can lead to errors possibly due to triangles on border..still need to find out. 
     mesh = Mesh.from_binary_vol(mask, mask_box, fragment_shape=fragment_shape, fragment_origin=fragment_origin, lod = rescale_level, rescale_method = rescale_method, smoothing_rounds=smoothing)
     mesh.vertices_zyx *= 2**rescale_level
+    #trimesh.Trimesh(mesh.vertices_zyx[:,::-1],mesh.faces).export(f"/groups/scicompsoft/home/ackermand/Programming/flyemflows/temp_data/tempMito/{sv}_{int(fragment_origin[0])}_{int(fragment_origin[1])}_{int(fragment_origin[2])}.obj")
+
     #print(fragment_origin,fragment_origin+fragment_shape,np.min(mesh.vertices_zyx[:,::-1],axis=0),np.max(mesh.vertices_zyx[:,::-1],axis=0))
     #mesh.trim(rescale_level)
 
